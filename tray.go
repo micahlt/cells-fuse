@@ -47,8 +47,10 @@ func setupTray(session *AppSession, mountSignal chan bool, showWindow func()) {
 	})
 
 	mQuit.Click(func() {
+		if session.IsMounted {
+			mountSignal <- false
+		}
 		systray.Quit()
-		// os.Exit(0) // handled in main
 	})
 
 	// Logic for dynamic updates (Keep the loop for title updates)

@@ -84,7 +84,10 @@ func main() {
 						})
 					})
 				}, func() {
-					// On Quit
+					if session.IsMounted && session.FuseHost != nil {
+						fmt.Println("Unmounting FUSE before exit...")
+						session.FuseHost.Unmount()
+					}
 					os.Exit(0)
 				})
 			}()
