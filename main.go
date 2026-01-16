@@ -1,0 +1,102 @@
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/diamondburned/gotk4/pkg/gio/v2"
+	"github.com/diamondburned/gotk4/pkg/glib/v2"
+	"github.com/diamondburned/gotk4/pkg/gtk/v4"
+	"github.com/energye/systray"
+	"github.com/pydio/cells-sdk-go/v5/apiv1/client"
+	"github.com/winfsp/cgofuse/fuse"
+)
+
+type AppSession struct {
+	PydioClient      *client.PydioCellsRestAPI
+	AuthToken        string
+	AppUrl           string
+	S3Client         *s3.Client
+	IsMounted        bool
+	MountPoint       string
+	FuseHost         *fuse.FileSystemHost
+	RefreshToken     string
+	TokenExpiry      int64
+	User             string
+	CellsFuse        *CellsFuse
+	TrayUpdateSignal chan bool
+	LogChannel       chan string
+}
+
+const AppID = "com.micahlindley.cells-fuse"
+const AppVersion = "0.1.0"
+
+func Log(session *AppSession, format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	fmt.Println(msg)
+	select {
+	case session.LogChannel <- msg:
+	default:
+		// Drop message if channel is full to prevent blocking
+	}
+}
+
+func main() {
+	fmt.Println("Hello world")
+
+	session := &AppSession{
+		MountPoint:       "~/cells",
+		TrayUpdateSignal: make(chan bool, 1),
+		LogChannel:       make(chan string, 100),
+	}
+
+	if err := LoadConfig(session); err != nil {
+		fmt.Printf("Warning: could not load config: %v\n", err)
+	}
+
+	mountSignal := make(chan bool)
+	go runFuseBackground(session, mountSignal)
+
+	startTokenRefresher(session)
+
+	app := gtk.NewApplication(AppID, gio.ApplicationFlagsNone)
+
+	app.Hold()
+
+	var mainWindow *gtk.ApplicationWindow
+	var systrayStarted bool
+
+	app.ConnectActivate(func() {
+		if !systrayStarted {
+			systrayStarted = true
+			// Launch Systray in a separate goroutine.
+			go func() {
+				systray.Run(func() {
+					setupTray(session, mountSignal, func() {
+						// Show the window using glib idle to ensure thread safety
+						glib.IdleAdd(func() bool {
+							if mainWindow != nil {
+								mainWindow.SetVisible(true)
+								mainWindow.Present()
+							}
+							return false
+						})
+					})
+				}, func() {
+					// On Quit
+					os.Exit(0)
+				})
+			}()
+		}
+
+		if mainWindow == nil {
+			mainWindow = createMainWindow(app, session, mountSignal)
+		}
+		mainWindow.Show()
+	})
+
+	if code := app.Run(os.Args); code > 0 {
+		os.Exit(code)
+	}
+}
