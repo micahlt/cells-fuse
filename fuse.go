@@ -50,6 +50,14 @@ type CacheEntry struct {
 	ExpireAt time.Time
 }
 
+// OpenFileHandle tracks an open file descriptor for efficient multi-write operations.
+// Each FUSE file handle maps to one of these, avoiding repeated open/close overhead.
+type OpenFileHandle struct {
+	mu   sync.Mutex // Protects concurrent writes to the same file
+	fd   *os.File   // Open file descriptor
+	path string     // Internal path for logging and cleanup
+}
+
 type CellsFuse struct {
 	fuse.FileSystemBase
 	S3Client        *s3.Client
@@ -65,6 +73,10 @@ type CellsFuse struct {
 	cacheTTL      time.Duration
 	maxCacheBytes int64 // Maximum bytes for read-ahead cache
 	prefetchPool  *PrefetchWorkerPool
+	// File descriptor tracking for efficient writes
+	openFiles      sync.Map // fh (uint64) -> *OpenFileHandle
+	nextFileHandle uint64
+	fhMutex        sync.Mutex // Protects nextFileHandle allocation
 }
 
 func createApiClient(session AppSession) *apiV1Client.PydioCellsRestAPI {
@@ -311,7 +323,7 @@ func (self *CellsFuse) Create(path string, flags int, mode uint32) (int, uint64)
 		return errCode, 0
 	}
 
-	// 1. Create a local temporary file to hold the data while it's being written
+	// 1. Create and open a local temporary file to hold the data while it's being written
 	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
 	self.Logger("PYDIO | temp file: " + tempPath)
 	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
@@ -319,9 +331,19 @@ func (self *CellsFuse) Create(path string, flags int, mode uint32) (int, uint64)
 		self.Logger("OS | " + err.Error())
 		return -int(fuse.EIO), 0
 	}
-	f.Close()
 
-	// 2. Cache the new file so Getattr can find it immediately
+	// 2. Allocate a file handle and store the open file descriptor
+	self.fhMutex.Lock()
+	self.nextFileHandle++
+	fh := self.nextFileHandle
+	self.fhMutex.Unlock()
+
+	self.openFiles.Store(fh, &OpenFileHandle{
+		fd:   f,
+		path: internalPath,
+	})
+
+	// 3. Cache the new file so Getattr can find it immediately
 	now := time.Now()
 	stat := &fuse.Stat_t{
 		Mode:  mode,
@@ -343,10 +365,10 @@ func (self *CellsFuse) Create(path string, flags int, mode uint32) (int, uint64)
 		ExpireAt: time.Now().Add(self.cacheTTL),
 	})
 
-	// 3. Invalidate parent so readdir might pick it up if cached
+	// 4. Invalidate parent so readdir might pick it up if cached
 	self.invalidateCache(filepath.Dir(internalPath))
 
-	return 0, 0
+	return 0, fh
 }
 
 func (self *CellsFuse) Write(path string, buff []byte, ofst int64, fh uint64) int {
@@ -354,19 +376,37 @@ func (self *CellsFuse) Write(path string, buff []byte, ofst int64, fh uint64) in
 	if errCode != 0 {
 		return errCode
 	}
-	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
 
-	// Open the local buffer with O_CREATE to treat missing temp file as new file
-	f, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE, 0644)
-	if err != nil {
-		self.Logger("OS | " + err.Error())
-		return -int(fuse.EIO)
+	// Look up the open file handle
+	val, ok := self.openFiles.Load(fh)
+	if !ok {
+		// File handle not found - this shouldn't happen in normal operation
+		// Fall back to opening the file directly (for compatibility)
+		tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
+		f, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE, 0644)
+		if err != nil {
+			self.Logger("OS | Write fallback error: " + err.Error())
+			return -int(fuse.EIO)
+		}
+		defer f.Close()
+
+		n, err := f.WriteAt(buff, ofst)
+		if err != nil {
+			return -int(fuse.EIO)
+		}
+		return n
 	}
-	defer f.Close()
 
-	// Write to the specific offset requested by the OS
-	n, err := f.WriteAt(buff, ofst)
+	handle := val.(*OpenFileHandle)
+
+	// Protect concurrent writes to the same file
+	handle.mu.Lock()
+	defer handle.mu.Unlock()
+
+	// Write to the specific offset using the open file descriptor
+	n, err := handle.fd.WriteAt(buff, ofst)
 	if err != nil {
+		self.Logger("OS | Write error: " + err.Error())
 		return -int(fuse.EIO)
 	}
 
@@ -422,6 +462,16 @@ func (self *CellsFuse) Release(path string, fh uint64) int {
 	internalPath, errCode := self.beginOp("Release", path)
 	if errCode != 0 {
 		return errCode
+	}
+
+	// Close the file descriptor if it's open
+	if val, ok := self.openFiles.LoadAndDelete(fh); ok {
+		handle := val.(*OpenFileHandle)
+		handle.mu.Lock()
+		if handle.fd != nil {
+			handle.fd.Close()
+		}
+		handle.mu.Unlock()
 	}
 
 	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
@@ -769,20 +819,47 @@ func (self *CellsFuse) Unlink(path string) int {
 	return 0
 }
 
-func (self *CellsFuse) Rmdir(path string) int {
-	// Just wrap Unlink since Pydio handles both the same way
-	return self.Unlink(path)
-}
-
 func (self *CellsFuse) Open(path string, flags int) (int, uint64) {
-	_, errCode := self.beginOp("Open", path)
+	internalPath, errCode := self.beginOp("Open", path)
 	if errCode != 0 {
 		return errCode, 0
 	}
 
-	// If opening for writing, we might want to ensure the temp file exists,
-	// but usually Write/Truncate handles the actual file creation.
-	// Returning 0 indicates success.
+	// Check if we're opening for writing
+	isWrite := (flags&os.O_WRONLY != 0) || (flags&os.O_RDWR != 0)
+
+	if isWrite {
+		// Open the temp file and keep the descriptor open
+		tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
+
+		// Determine the open flags
+		openFlags := os.O_RDWR
+		if flags&os.O_TRUNC != 0 {
+			openFlags |= os.O_TRUNC
+		}
+
+		f, err := os.OpenFile(tempPath, openFlags|os.O_CREATE, 0644)
+		if err != nil {
+			self.Logger("OS | Open error: " + err.Error())
+			return -int(fuse.EIO), 0
+		}
+
+		// Allocate a file handle and store the open file descriptor
+		self.fhMutex.Lock()
+		self.nextFileHandle++
+		fh := self.nextFileHandle
+		self.fhMutex.Unlock()
+
+		self.openFiles.Store(fh, &OpenFileHandle{
+			fd:   f,
+			path: internalPath,
+		})
+
+		return 0, fh
+	}
+
+	// For read-only opens, we don't need to track the file handle
+	// since reads go through the S3 cache
 	return 0, 0
 }
 
@@ -791,11 +868,33 @@ func (self *CellsFuse) Truncate(path string, size int64, fh uint64) int {
 	if errCode != 0 {
 		return errCode
 	}
+
+	// Try to use an open file handle if available
+	if fh != 0 {
+		if val, ok := self.openFiles.Load(fh); ok {
+			handle := val.(*OpenFileHandle)
+			handle.mu.Lock()
+			defer handle.mu.Unlock()
+
+			if err := handle.fd.Truncate(size); err != nil {
+				self.Logger("OS | Truncate Error (via handle): " + err.Error())
+				return -int(fuse.EIO)
+			}
+
+			// Update the cache size immediately
+			if entry, ok := self.getCached(internalPath); ok {
+				entry.Stat.Size = size
+				self.setCache(internalPath, entry)
+			}
+			self.clearReadCache(internalPath)
+
+			return 0
+		}
+	}
+
+	// Fall back to opening the file if no handle is available
 	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
 
-	// Truncate the local temp file to the desired size.
-	// If it doesn't exist, we create it (if size is 0, or extend it).
-	// 'os.Truncate' requires the file to exist, so we might need OpenFile.
 	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		self.Logger("OS | Truncate Open Error: " + err.Error())
