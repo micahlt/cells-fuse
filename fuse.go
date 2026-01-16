@@ -47,21 +47,19 @@ type CacheEntry struct {
 	ExpireAt time.Time
 }
 
-var bufferPool = sync.Pool{
-	New: func() interface{} {
-		b := make([]byte, ReadAheadSize)
-		return &b
-	},
-}
-
 type CellsFuse struct {
 	fuse.FileSystemBase
-	S3Client       *s3.Client
-	metadataCache  sync.Map
-	readAheadCache sync.Map
-	prefetchActive sync.Map // Track which chunks are being prefetched
-	Logger         func(string, ...interface{})
+	S3Client        *s3.Client
+	metadataCache   sync.Map
+	readAheadCache  sync.Map
+	prefetchActive  sync.Map // Track which chunks are being prefetched
+	Logger          func(string, ...interface{})
 	*apiV1Client.PydioCellsRestAPI
+	// Configurable performance parameters
+	readAheadSize   int64
+	prefetchAhead   int64
+	cacheChunks     int64
+	cacheTTL        time.Duration
 }
 
 func createApiClient(session AppSession) *apiV1Client.PydioCellsRestAPI {
@@ -119,7 +117,7 @@ func (self *CellsFuse) getCached(path string) (*CacheEntry, bool) {
 }
 
 func (self *CellsFuse) setCache(path string, entry *CacheEntry) {
-	entry.ExpireAt = time.Now().Add(CacheTTL)
+	entry.ExpireAt = time.Now().Add(self.cacheTTL)
 	self.metadataCache.Store(path, entry)
 }
 
@@ -258,7 +256,7 @@ func (self *CellsFuse) Mkdir(path string, mode uint32) int {
 			Path: path,
 			Type: models.TreeNodeTypeCOLLECTION.Pointer(),
 		},
-		ExpireAt: time.Now().Add(CacheTTL),
+		ExpireAt: time.Now().Add(self.cacheTTL),
 	})
 	parentDir := filepath.Dir(path)
 	self.invalidateCache(parentDir)
@@ -299,7 +297,7 @@ func (self *CellsFuse) Create(path string, flags int, mode uint32) (int, uint64)
 			Path: path,
 			Type: models.TreeNodeTypeLEAF.Pointer(),
 		},
-		ExpireAt: time.Now().Add(CacheTTL),
+		ExpireAt: time.Now().Add(self.cacheTTL),
 	})
 
 	// 3. Invalidate parent so readdir might pick it up if cached
@@ -421,7 +419,7 @@ func (self *CellsFuse) Release(path string, fh uint64) int {
 			Size:  strconv.FormatInt(fileStat.Size(), 10),
 			MTime: strconv.FormatInt(fileStat.ModTime().Unix(), 10),
 		},
-		ExpireAt: time.Now().Add(CacheTTL),
+		ExpireAt: time.Now().Add(self.cacheTTL),
 	})
 
 	// Invalidate parent directory to ensure it shows up in future listings
@@ -894,8 +892,8 @@ func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int
 	// Loop until the requested buffer is full or we hit EOF
 	for totalRead < len(buff) {
 		currentOffset := ofst + int64(totalRead)
-		chunkIndex := currentOffset / int64(ReadAheadSize)
-		chunkOffset := chunkIndex * int64(ReadAheadSize)
+		chunkIndex := currentOffset / self.readAheadSize
+		chunkOffset := chunkIndex * self.readAheadSize
 		// Use null byte as separator to avoid collisions with filenames
 		cacheKey := fmt.Sprintf("%s\x00%d", path, chunkIndex)
 
@@ -904,18 +902,15 @@ func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int
 			data = val.([]byte)
 			self.Logger("CACHE HIT: chunk=%d", chunkIndex)
 			// Trigger prefetch even on cache hits to stay ahead
-			for i := int64(1); i <= PrefetchAhead; i++ {
+			for i := int64(1); i <= self.prefetchAhead; i++ {
 				go self.prefetchChunk(path, chunkIndex+i)
 			}
 		} else {
 			self.Logger("CACHE MISS: chunk=%d, fetching from S3...", chunkIndex)
 			fetchStart := time.Now()
 
-			// Fetch chunk from S3 using buffer pool for memory efficiency
-			bufPtr := bufferPool.Get().(*[]byte)
-			data = *bufPtr
-			// Because we are reusing buffers, we must ensure we use the full capacity
-			data = data[:cap(data)]
+			// Fetch chunk from S3 using dynamically sized buffer
+			data = make([]byte, self.readAheadSize)
 
 			// Explicitly manage context cancelation in the loop
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -931,7 +926,6 @@ func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int
 			output, err := self.S3Client.GetObject(ctx, input)
 			if err != nil {
 				cancel()
-				bufferPool.Put(bufPtr) // Return to pool if failed
 				// If 416 (Range Not Satisfiable), it usually means we are trying to read past EOF.
 				if strings.Contains(err.Error(), "416") {
 					self.Logger("EOF reached (416 error)")
@@ -949,7 +943,6 @@ func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int
 			self.Logger("S3 FETCH: chunk=%d bytes=%d duration=%v", chunkIndex, n, fetchDuration)
 
 			if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-				bufferPool.Put(bufPtr)
 				self.Logger(fmt.Sprintf("Body Read Error: %v\n", err))
 				break
 			}
@@ -959,14 +952,14 @@ func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int
 			self.readAheadCache.Store(cacheKey, data)
 
 			// Aggressively prefetch multiple chunks ahead for high-latency connections
-			for i := int64(1); i <= PrefetchAhead; i++ {
+			for i := int64(1); i <= self.prefetchAhead; i++ {
 				go self.prefetchChunk(path, chunkIndex+i)
 			}
 		}
 
-		// Keep last 100 chunks cached (~400MB at 4MB per chunk)
-		if chunkIndex > 100 {
-			self.readAheadCache.Delete(fmt.Sprintf("%s\x00%d", path, chunkIndex-100))
+		// Keep configured number of chunks cached
+		if chunkIndex > self.cacheChunks {
+			self.readAheadCache.Delete(fmt.Sprintf("%s\x00%d", path, chunkIndex-self.cacheChunks))
 		}
 
 		relativeOffset := currentOffset - chunkOffset
@@ -986,8 +979,8 @@ func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int
 		copy(buff[totalRead:], data[relativeOffset:relativeOffset+toCopy])
 		totalRead += int(toCopy)
 
-		// If this chunk was smaller than ReadAheadSize, it's the last chunk.
-		if len(data) < int(ReadAheadSize) {
+		// If this chunk was smaller than expected, it's the last chunk.
+		if len(data) < int(self.readAheadSize) {
 			break
 		}
 	}
@@ -1012,13 +1005,11 @@ func (self *CellsFuse) prefetchChunk(path string, chunkIndex int64) {
 	}
 	defer self.prefetchActive.Delete(cacheKey)
 
-	bufPtr := bufferPool.Get().(*[]byte)
-	data := (*bufPtr)[:cap(*bufPtr)]
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	data := make([]byte, self.readAheadSize)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	chunkOffset := chunkIndex * int64(ReadAheadSize)
+	chunkOffset := chunkIndex * self.readAheadSize
 	byteRange := fmt.Sprintf("bytes=%d-%d", chunkOffset, chunkOffset+int64(len(data))-1)
 
 	output, err := self.S3Client.GetObject(ctx, &s3.GetObjectInput{
@@ -1028,7 +1019,6 @@ func (self *CellsFuse) prefetchChunk(path string, chunkIndex int64) {
 	})
 
 	if err != nil {
-		bufferPool.Put(bufPtr)
 		return
 	}
 
@@ -1036,7 +1026,6 @@ func (self *CellsFuse) prefetchChunk(path string, chunkIndex int64) {
 	output.Body.Close()
 
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		bufferPool.Put(bufPtr)
 		return
 	}
 
@@ -1073,6 +1062,10 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 					Logger: func(format string, args ...interface{}) {
 						Log(session, format, args...)
 					},
+					readAheadSize: int64(session.ChunkSizeMB) * 1024 * 1024,
+					prefetchAhead: int64(session.PrefetchChunks),
+					cacheChunks:   int64(session.CacheChunks),
+					cacheTTL:      time.Duration(session.CacheTTLSeconds) * time.Second,
 				}
 				session.CellsFuse = cf
 				session.FuseHost = fuse.NewFileSystemHost(cf)

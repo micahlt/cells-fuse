@@ -19,12 +19,16 @@ func getConfigPath() (string, error) {
 }
 
 type AppConfig struct {
-	AuthToken    string `json:"AuthToken"`
-	RefreshToken string `json:"RefreshToken"`
-	TokenExpiry  int64  `json:"TokenExpiry"`
-	MountPoint   string `json:"MountPoint"`
-	AppUrl       string `json:"AppUrl"`
-	User         string `json:"User"`
+	AuthToken       string `json:"AuthToken"`
+	RefreshToken    string `json:"RefreshToken"`
+	TokenExpiry     int64  `json:"TokenExpiry"`
+	MountPoint      string `json:"MountPoint"`
+	AppUrl          string `json:"AppUrl"`
+	User            string `json:"User"`
+	ChunkSizeMB     int    `json:"ChunkSizeMB,omitempty"`
+	PrefetchChunks  int    `json:"PrefetchChunks,omitempty"`
+	CacheChunks     int    `json:"CacheChunks,omitempty"`
+	CacheTTLSeconds int    `json:"CacheTTLSeconds,omitempty"`
 }
 
 func LoadConfig(session *AppSession) error {
@@ -52,6 +56,20 @@ func LoadConfig(session *AppSession) error {
 	session.MountPoint = config.MountPoint
 	session.AppUrl = config.AppUrl
 	session.User = config.User
+	
+	// Load performance settings with defaults if not set
+	if config.ChunkSizeMB > 0 {
+		session.ChunkSizeMB = config.ChunkSizeMB
+	}
+	if config.PrefetchChunks > 0 {
+		session.PrefetchChunks = config.PrefetchChunks
+	}
+	if config.CacheChunks > 0 {
+		session.CacheChunks = config.CacheChunks
+	}
+	if config.CacheTTLSeconds > 0 {
+		session.CacheTTLSeconds = config.CacheTTLSeconds
+	}
 
 	return nil
 }
@@ -63,12 +81,16 @@ func SaveConfig(session *AppSession) error {
 	}
 
 	config := AppConfig{
-		AuthToken:    session.AuthToken,
-		RefreshToken: session.RefreshToken,
-		TokenExpiry:  session.TokenExpiry,
-		MountPoint:   session.MountPoint,
-		AppUrl:       session.AppUrl,
-		User:         session.User,
+		AuthToken:       session.AuthToken,
+		RefreshToken:    session.RefreshToken,
+		TokenExpiry:     session.TokenExpiry,
+		MountPoint:      session.MountPoint,
+		AppUrl:          session.AppUrl,
+		User:            session.User,
+		ChunkSizeMB:     session.ChunkSizeMB,
+		PrefetchChunks:  session.PrefetchChunks,
+		CacheChunks:     session.CacheChunks,
+		CacheTTLSeconds: session.CacheTTLSeconds,
 	}
 
 	data, err := json.MarshalIndent(config, "", "  ")

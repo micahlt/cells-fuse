@@ -93,6 +93,61 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 	})
 	mountBox.Append(browseBtn)
 	box.Append(mountBox)
+	
+	// Performance Settings Expander
+	perfExpander := gtk.NewExpander("Performance Settings")
+	perfBox := gtk.NewBox(gtk.OrientationVertical, 5)
+	perfExpander.SetChild(perfBox)
+	
+	// Chunk Size
+	chunkLabel := gtk.NewLabel(fmt.Sprintf("Chunk Size: %d MB", session.ChunkSizeMB))
+	perfBox.Append(chunkLabel)
+	chunkScale := gtk.NewScaleWithRange(gtk.OrientationHorizontal, 1, 16, 1)
+	chunkScale.SetValue(float64(session.ChunkSizeMB))
+	chunkScale.ConnectValueChanged(func() {
+		session.ChunkSizeMB = int(chunkScale.Value())
+		chunkLabel.SetText(fmt.Sprintf("Chunk Size: %d MB", session.ChunkSizeMB))
+		SaveConfig(session)
+	})
+	perfBox.Append(chunkScale)
+	
+	// Prefetch Chunks
+	prefetchLabel := gtk.NewLabel(fmt.Sprintf("Prefetch Ahead: %d chunks", session.PrefetchChunks))
+	perfBox.Append(prefetchLabel)
+	prefetchScale := gtk.NewScaleWithRange(gtk.OrientationHorizontal, 1, 20, 1)
+	prefetchScale.SetValue(float64(session.PrefetchChunks))
+	prefetchScale.ConnectValueChanged(func() {
+		session.PrefetchChunks = int(prefetchScale.Value())
+		prefetchLabel.SetText(fmt.Sprintf("Prefetch Ahead: %d chunks", session.PrefetchChunks))
+		SaveConfig(session)
+	})
+	perfBox.Append(prefetchScale)
+	
+	// Cache Chunks
+	cacheLabel := gtk.NewLabel(fmt.Sprintf("Cache Size: %d chunks", session.CacheChunks))
+	perfBox.Append(cacheLabel)
+	cacheScale := gtk.NewScaleWithRange(gtk.OrientationHorizontal, 10, 200, 10)
+	cacheScale.SetValue(float64(session.CacheChunks))
+	cacheScale.ConnectValueChanged(func() {
+		session.CacheChunks = int(cacheScale.Value())
+		cacheLabel.SetText(fmt.Sprintf("Cache Size: %d chunks", session.CacheChunks))
+		SaveConfig(session)
+	})
+	perfBox.Append(cacheScale)
+	
+	// Cache TTL
+	ttlLabel := gtk.NewLabel(fmt.Sprintf("Metadata Cache TTL: %d seconds", session.CacheTTLSeconds))
+	perfBox.Append(ttlLabel)
+	ttlScale := gtk.NewScaleWithRange(gtk.OrientationHorizontal, 1, 60, 1)
+	ttlScale.SetValue(float64(session.CacheTTLSeconds))
+	ttlScale.ConnectValueChanged(func() {
+		session.CacheTTLSeconds = int(ttlScale.Value())
+		ttlLabel.SetText(fmt.Sprintf("Metadata Cache TTL: %d seconds", session.CacheTTLSeconds))
+		SaveConfig(session)
+	})
+	perfBox.Append(ttlScale)
+	
+	box.Append(perfExpander)
 
 	statusLabel := gtk.NewLabel("Ready")
 	box.Append(statusLabel)
