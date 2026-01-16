@@ -26,7 +26,10 @@ jobs:
           sudo apt-get install -y libfuse-dev libfuse3-dev gcc libgtk-4-dev
 
       - name: Build
-        run: go build -v .
+        run: |
+          go mod download
+          go get cells-fuse
+          go build -v .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
