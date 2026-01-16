@@ -1,12 +1,19 @@
 package main
 
 import (
+	"context"
+	_ "embed"
 	"fmt"
 
+	"github.com/diamondburned/gotk4/pkg/gdk/v4"
+	"github.com/diamondburned/gotk4/pkg/gio/v2"
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 	"github.com/skratchdot/open-golang/open"
 )
+
+//go:embed assets/cells-color.png
+var logoData []byte
 
 func createMainWindow(app *gtk.Application, session *AppSession, mountSignal chan bool) *gtk.ApplicationWindow {
 	window := gtk.NewApplicationWindow(app)
@@ -20,11 +27,30 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 	box.SetMarginEnd(20)
 	window.SetChild(box)
 
-	header := gtk.NewLabel("")
-	header.SetMarkup("<span size='x-large' weight='bold'>Authentication</span>")
-	box.Append(header)
+	about := gtk.NewAboutDialog()
+	about.SetAuthors([]string{"Micah Lindley"})
+	about.SetComments("A FUSE filesystem for Pydio Cells")
+	about.SetLicenseType(gtk.LicenseGPL30)
+	about.SetWebsite("https://github.com/micahlt/cells-fuse")
+	about.SetWebsiteLabel("GitHub repository")
+	about.SetVersion("1.0.0")
+	about.ConnectCloseRequest(func() bool {
+		about.SetVisible(false)
+		return true
+	})
 
-	urlLabel := gtk.NewLabel("INSTANCE URL")
+	bytes := glib.NewBytesWithGo(logoData)
+	texture, err := gdk.NewTextureFromBytes(bytes)
+	if err == nil {
+		about.SetLogo(texture)
+	}
+	aboutButton := gtk.NewButtonFromIconName("settings")
+	aboutButton.ConnectClicked(func() {
+		about.SetVisible(true)
+	})
+	box.Append(aboutButton)
+
+	urlLabel := gtk.NewLabel("Cells instance URL")
 	urlLabel.SetHAlign(gtk.AlignStart)
 	box.Append(urlLabel)
 
@@ -35,16 +61,38 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 	}
 	box.Append(entry)
 
-	mountLabel := gtk.NewLabel("MOUNT POINT")
+	mountLabel := gtk.NewLabel("Local mount point")
 	mountLabel.SetHAlign(gtk.AlignStart)
 	box.Append(mountLabel)
 
+	mountBox := gtk.NewBox(gtk.OrientationHorizontal, 5)
+
 	mountEntry := gtk.NewEntry()
 	mountEntry.SetPlaceholderText("/home/user/cells")
+	mountEntry.SetHExpand(true)
 	if session.MountPoint != "" {
 		mountEntry.SetText(session.MountPoint)
 	}
-	box.Append(mountEntry)
+	mountBox.Append(mountEntry)
+
+	browseBtn := gtk.NewButtonWithLabel("Browse...")
+	browseBtn.ConnectClicked(func() {
+		dialog := gtk.NewFileDialog()
+
+		dialog.SelectFolder(context.TODO(), &window.Window, func(res gio.AsyncResulter) {
+			file, err := dialog.SelectFolderFinish(res)
+			if err != nil {
+				return
+			}
+			if file != nil {
+				path := file.Path()
+				mountEntry.SetText(path)
+				session.MountPoint = path
+			}
+		})
+	})
+	mountBox.Append(browseBtn)
+	box.Append(mountBox)
 
 	statusLabel := gtk.NewLabel("Ready")
 	box.Append(statusLabel)
@@ -62,9 +110,7 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 	box.Append(mountBtn)
 
 	mountBtn.ConnectClicked(func() {
-		// Update mount point
 		session.MountPoint = mountEntry.Text()
-		// Save config to persist mount point
 		if err := SaveConfig(session); err != nil {
 			fmt.Printf("Error saving config: %v\n", err)
 		}
@@ -119,7 +165,7 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 	}()
 
 	window.ConnectCloseRequest(func() bool {
-		window.Hide()
+		window.SetVisible(false)
 		// Return true to stop other handlers (like destruction)
 		return true
 	})
