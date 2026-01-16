@@ -93,12 +93,12 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 	})
 	mountBox.Append(browseBtn)
 	box.Append(mountBox)
-	
+
 	// Performance Settings Expander
 	perfExpander := gtk.NewExpander("Performance Settings")
 	perfBox := gtk.NewBox(gtk.OrientationVertical, 5)
 	perfExpander.SetChild(perfBox)
-	
+
 	// Chunk Size
 	chunkLabel := gtk.NewLabel(fmt.Sprintf("Chunk Size: %d MB", session.ChunkSizeMB))
 	perfBox.Append(chunkLabel)
@@ -110,7 +110,7 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 		SaveConfig(session)
 	})
 	perfBox.Append(chunkScale)
-	
+
 	// Prefetch Chunks
 	prefetchLabel := gtk.NewLabel(fmt.Sprintf("Prefetch Ahead: %d chunks", session.PrefetchChunks))
 	perfBox.Append(prefetchLabel)
@@ -122,7 +122,7 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 		SaveConfig(session)
 	})
 	perfBox.Append(prefetchScale)
-	
+
 	// Cache Chunks
 	cacheLabel := gtk.NewLabel(fmt.Sprintf("Cache Size: %d chunks", session.CacheChunks))
 	perfBox.Append(cacheLabel)
@@ -134,7 +134,7 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 		SaveConfig(session)
 	})
 	perfBox.Append(cacheScale)
-	
+
 	// Cache TTL
 	ttlLabel := gtk.NewLabel(fmt.Sprintf("Metadata Cache TTL: %d seconds", session.CacheTTLSeconds))
 	perfBox.Append(ttlLabel)
@@ -146,7 +146,7 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 		SaveConfig(session)
 	})
 	perfBox.Append(ttlScale)
-	
+
 	box.Append(perfExpander)
 
 	statusLabel := gtk.NewLabel("Ready")

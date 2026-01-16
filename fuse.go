@@ -49,17 +49,17 @@ type CacheEntry struct {
 
 type CellsFuse struct {
 	fuse.FileSystemBase
-	S3Client        *s3.Client
-	metadataCache   sync.Map
-	readAheadCache  sync.Map
-	prefetchActive  sync.Map // Track which chunks are being prefetched
-	Logger          func(string, ...interface{})
+	S3Client       *s3.Client
+	metadataCache  sync.Map
+	readAheadCache sync.Map
+	prefetchActive sync.Map // Track which chunks are being prefetched
+	Logger         func(string, ...interface{})
 	*apiV1Client.PydioCellsRestAPI
 	// Configurable performance parameters
-	readAheadSize   int64
-	prefetchAhead   int64
-	cacheChunks     int64
-	cacheTTL        time.Duration
+	readAheadSize int64
+	prefetchAhead int64
+	cacheChunks   int64
+	cacheTTL      time.Duration
 }
 
 func createApiClient(session AppSession) *apiV1Client.PydioCellsRestAPI {

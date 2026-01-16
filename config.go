@@ -56,7 +56,7 @@ func LoadConfig(session *AppSession) error {
 	session.MountPoint = config.MountPoint
 	session.AppUrl = config.AppUrl
 	session.User = config.User
-	
+
 	// Load performance settings with defaults if not set
 	if config.ChunkSizeMB > 0 {
 		session.ChunkSizeMB = config.ChunkSizeMB

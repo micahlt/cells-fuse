@@ -29,10 +29,10 @@ type AppSession struct {
 	LogChannel        chan string
 	MountErrorChannel chan string
 	// Performance tuning parameters
-	ChunkSizeMB       int `json:"ChunkSizeMB"`       // ReadAheadSize in MB
-	PrefetchChunks    int `json:"PrefetchChunks"`    // How many chunks to prefetch ahead
-	CacheChunks       int `json:"CacheChunks"`       // How many chunks to keep in cache
-	CacheTTLSeconds   int `json:"CacheTTLSeconds"`   // Metadata cache TTL in seconds
+	ChunkSizeMB     int `json:"ChunkSizeMB"`     // ReadAheadSize in MB
+	PrefetchChunks  int `json:"PrefetchChunks"`  // How many chunks to prefetch ahead
+	CacheChunks     int `json:"CacheChunks"`     // How many chunks to keep in cache
+	CacheTTLSeconds int `json:"CacheTTLSeconds"` // Metadata cache TTL in seconds
 }
 
 const AppID = "com.micahlindley.cells-fuse"
@@ -57,9 +57,9 @@ func main() {
 		LogChannel:        make(chan string, 100),
 		MountErrorChannel: make(chan string, 1),
 		// Default performance settings
-		ChunkSizeMB:    4,
-		PrefetchChunks: 10,
-		CacheChunks:    100,
+		ChunkSizeMB:     4,
+		PrefetchChunks:  10,
+		CacheChunks:     100,
 		CacheTTLSeconds: 5,
 	}
 
