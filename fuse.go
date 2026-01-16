@@ -178,17 +178,26 @@ func (self *CellsFuse) toInternalPath(path string) string {
 	return "/" + strings.Join(parts, "/")
 }
 
-func (self *CellsFuse) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
+func (self *CellsFuse) beginOp(op string, path string) (string, int) {
 	if self.shouldIgnorePath(path) {
-		return -fuse.EOPNOTSUPP
+		return "", -fuse.EOPNOTSUPP
 	}
-	self.Logger("FUSE | Getattr %s", path)
-	if path == "/" {
+	if op != "" {
+		self.Logger("FUSE | %s %s", op, path)
+	}
+	return self.toInternalPath(path), 0
+}
+
+func (self *CellsFuse) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
+	internalPath, errCode := self.beginOp("Getattr", path)
+	if errCode != 0 {
+		return errCode
+	}
+
+	if internalPath == "/" {
 		stat.Mode = fuse.S_IFDIR | 0555 // Root directory: Read/Execute only (0555)
 		return 0
 	}
-
-	internalPath := self.toInternalPath(path)
 
 	// Check cache first
 	if cached, ok := self.getCached(internalPath); ok {
@@ -245,7 +254,11 @@ func (self *CellsFuse) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 }
 
 func (self *CellsFuse) Mkdir(path string, mode uint32) int {
-	internalPath := self.toInternalPath(path)
+	internalPath, errCode := self.beginOp("Mkdir", path)
+	if errCode != 0 {
+		return errCode
+	}
+
 	pydioPath := strings.TrimPrefix(internalPath, "/")
 	params := tree_service.NewCreateNodesParams().WithBody(&models.RestCreateNodesRequest{
 		Nodes: []*models.TreeNode{
@@ -289,12 +302,10 @@ func (self *CellsFuse) Mkdir(path string, mode uint32) int {
 }
 
 func (self *CellsFuse) Create(path string, flags int, mode uint32) (int, uint64) {
-	if self.shouldIgnorePath(path) {
-		return -fuse.EOPNOTSUPP, 0
+	internalPath, errCode := self.beginOp("Create", path)
+	if errCode != 0 {
+		return errCode, 0
 	}
-	self.Logger("FUSE | Create %s", path)
-
-	internalPath := self.toInternalPath(path)
 
 	// 1. Create a local temporary file to hold the data while it's being written
 	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
@@ -335,8 +346,10 @@ func (self *CellsFuse) Create(path string, flags int, mode uint32) (int, uint64)
 }
 
 func (self *CellsFuse) Write(path string, buff []byte, ofst int64, fh uint64) int {
-	self.Logger("FUSE | Write %s", path)
-	internalPath := self.toInternalPath(path)
+	internalPath, errCode := self.beginOp("Write", path)
+	if errCode != 0 {
+		return errCode
+	}
 	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
 
 	// Open the local buffer with O_CREATE to treat missing temp file as new file
@@ -409,11 +422,11 @@ func (self *CellsFuse) uploadLocalToPydio(localPath string, pydioPath string) (o
 }
 
 func (self *CellsFuse) Release(path string, fh uint64) int {
-	if self.shouldIgnorePath(path) {
-		return -fuse.EOPNOTSUPP
+	internalPath, errCode := self.beginOp("Release", path)
+	if errCode != 0 {
+		return errCode
 	}
-	self.Logger("FUSE | Release")
-	internalPath := self.toInternalPath(path)
+
 	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
 
 	if isTempFile(internalPath) {
@@ -478,11 +491,17 @@ func BuildRenameParams(source []string, targetFolder string, targetParent bool) 
 }
 
 func (self *CellsFuse) Rename(oldpath string, newpath string) int {
+	internalOld, errCode := self.beginOp("", oldpath)
+	if errCode != 0 {
+		return errCode
+	}
+	internalNew, errCode := self.beginOp("", newpath)
+	if errCode != 0 {
+		return errCode
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
-	internalOld := self.toInternalPath(oldpath)
-	internalNew := self.toInternalPath(newpath)
 
 	if isTempFile(internalOld) {
 		// Check for local file presence. If found, we treat it as a local-to-remote upload (atomic rename)
@@ -587,11 +606,17 @@ func (self *CellsFuse) Rename(oldpath string, newpath string) int {
 }
 
 func (self *CellsFuse) Copy(oldpath string, newpath string) int {
+	internalOld, errCode := self.beginOp("", oldpath)
+	if errCode != 0 {
+		return errCode
+	}
+	internalNew, errCode := self.beginOp("", newpath)
+	if errCode != 0 {
+		return errCode
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // Copies take longer
 	defer cancel()
-
-	internalOld := self.toInternalPath(oldpath)
-	internalNew := self.toInternalPath(newpath)
 
 	oldP := strings.TrimPrefix(internalOld, "/")
 	newP := strings.TrimPrefix(internalNew, "/")
@@ -693,8 +718,13 @@ func (self *CellsFuse) pollJobStatus(ctx context.Context, jobID string) error {
 }
 
 func (self *CellsFuse) Fsync(path string, datasync bool, fh uint64) int {
+	internalPath, errCode := self.beginOp("Fsync", path)
+	if errCode != 0 {
+		return errCode
+	}
+
 	// 1. Locate the local buffer in /tmp
-	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(path))
+	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
 
 	// Check if we even have anything to sync
 	if _, err := os.Stat(tempPath); os.IsNotExist(err) {
@@ -702,7 +732,7 @@ func (self *CellsFuse) Fsync(path string, datasync bool, fh uint64) int {
 	}
 
 	// 2. Perform an immediate S3 upload
-	_, err := self.uploadLocalToPydio(tempPath, path)
+	_, err := self.uploadLocalToPydio(tempPath, internalPath)
 	if err != nil {
 		self.Logger(fmt.Sprintf("Fsync Upload Failed for %s: %v\n", path, err))
 		return -int(fuse.EIO)
@@ -712,7 +742,10 @@ func (self *CellsFuse) Fsync(path string, datasync bool, fh uint64) int {
 }
 
 func (self *CellsFuse) Unlink(path string) int {
-	internalPath := self.toInternalPath(path)
+	internalPath, errCode := self.beginOp("Unlink", path)
+	if errCode != 0 {
+		return errCode
+	}
 	// 1. Translate path (Remove leading slash)
 	pydioPath := strings.TrimPrefix(internalPath, "/")
 
@@ -745,8 +778,9 @@ func (self *CellsFuse) Rmdir(path string) int {
 }
 
 func (self *CellsFuse) Open(path string, flags int) (int, uint64) {
-	if self.shouldIgnorePath(path) {
-		return -fuse.EOPNOTSUPP, 0
+	_, errCode := self.beginOp("Open", path)
+	if errCode != 0 {
+		return errCode, 0
 	}
 
 	// If opening for writing, we might want to ensure the temp file exists,
@@ -756,11 +790,10 @@ func (self *CellsFuse) Open(path string, flags int) (int, uint64) {
 }
 
 func (self *CellsFuse) Truncate(path string, size int64, fh uint64) int {
-	if self.shouldIgnorePath(path) {
-		return -fuse.EOPNOTSUPP
+	internalPath, errCode := self.beginOp("Truncate", path)
+	if errCode != 0 {
+		return errCode
 	}
-	self.Logger("FUSE | Truncate")
-	internalPath := self.toInternalPath(path)
 	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
 
 	// Truncate the local temp file to the desired size.
@@ -789,10 +822,10 @@ func (self *CellsFuse) Truncate(path string, size int64, fh uint64) int {
 }
 
 func (self *CellsFuse) Utimens(path string, tmsp []fuse.Timespec) int {
-	if self.shouldIgnorePath(path) {
-		return -fuse.EOPNOTSUPP
+	internalPath, errCode := self.beginOp("Utimens", path)
+	if errCode != 0 {
+		return errCode
 	}
-	internalPath := self.toInternalPath(path)
 	// Update the local cache with the new times so 'ls -l' shows changes immediately
 	if entry, ok := self.getCached(internalPath); ok {
 		if len(tmsp) > 0 {
@@ -809,12 +842,20 @@ func (self *CellsFuse) Utimens(path string, tmsp []fuse.Timespec) int {
 }
 
 func (self *CellsFuse) Chmod(path string, mode uint32) int {
+	_, errCode := self.beginOp("Chmod", path)
+	if errCode != 0 {
+		return errCode
+	}
 	// Pydio permissions are handled by ACLs, not unix modes.
 	// We swallow this to appease editors like nano.
 	return 0
 }
 
 func (self *CellsFuse) Chown(path string, uid uint32, gid uint32) int {
+	_, errCode := self.beginOp("Chown", path)
+	if errCode != 0 {
+		return errCode
+	}
 	// Pydio does not support changing ownership via unix UID/GID.
 	return 0
 }
@@ -939,7 +980,10 @@ func (self *CellsFuse) Readdir(path string, fill func(name string, stat *fuse.St
 
 func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int {
 	self.Logger("READ: path=%s offset=%d size=%d", path, ofst, len(buff))
-	internalPath := self.toInternalPath(path)
+	internalPath, errCode := self.beginOp("", path)
+	if errCode != 0 {
+		return errCode
+	}
 
 	startTime := time.Now()
 	totalRead := 0
