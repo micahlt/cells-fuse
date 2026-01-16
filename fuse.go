@@ -49,11 +49,12 @@ type CacheEntry struct {
 
 type CellsFuse struct {
 	fuse.FileSystemBase
-	S3Client       *s3.Client
-	metadataCache  sync.Map
-	readAheadCache sync.Map
-	prefetchActive sync.Map // Track which chunks are being prefetched
-	Logger         func(string, ...interface{})
+	S3Client        *s3.Client
+	metadataCache   sync.Map
+	readAheadCache  sync.Map
+	prefetchActive  sync.Map // Track which chunks are being prefetched
+	workspaceLabels sync.Map
+	Logger          func(string, ...interface{})
 	*apiV1Client.PydioCellsRestAPI
 	// Configurable performance parameters
 	readAheadSize int64
@@ -156,6 +157,22 @@ func isTempFile(path string) bool {
 	return false
 }
 
+func (self *CellsFuse) toInternalPath(path string) string {
+	if path == "/" || path == "." {
+		return path
+	}
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	if len(parts) == 0 {
+		return path
+	}
+	label := parts[0]
+	if slug, ok := self.workspaceLabels.Load(label); ok {
+		parts[0] = slug.(string)
+		return "/" + strings.Join(parts, "/")
+	}
+	return path
+}
+
 func (self *CellsFuse) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	if self.shouldIgnorePath(path) {
 		return -fuse.EOPNOTSUPP
@@ -166,8 +183,10 @@ func (self *CellsFuse) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 		return 0
 	}
 
+	internalPath := self.toInternalPath(path)
+
 	// Check cache first
-	if cached, ok := self.getCached(path); ok {
+	if cached, ok := self.getCached(internalPath); ok {
 		*stat = *cached.Stat
 		return 0
 	}
@@ -177,7 +196,7 @@ func (self *CellsFuse) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	defer cancel()
 
 	// Call Pydio API to get node info
-	params := tree_service.NewHeadNodeParams().WithNode(path).WithContext(ctx)
+	params := tree_service.NewHeadNodeParams().WithNode(internalPath).WithContext(ctx)
 	result, err := self.TreeService.HeadNode(params)
 	if err != nil {
 		self.Logger("Getattr Error: %v", err)
@@ -210,7 +229,7 @@ func (self *CellsFuse) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 			}
 		}
 		// Cache the result
-		self.setCache(path, &CacheEntry{
+		self.setCache(internalPath, &CacheEntry{
 			Stat: stat,
 			Node: node,
 		})
@@ -221,7 +240,8 @@ func (self *CellsFuse) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 }
 
 func (self *CellsFuse) Mkdir(path string, mode uint32) int {
-	pydioPath := strings.TrimPrefix(path, "/")
+	internalPath := self.toInternalPath(path)
+	pydioPath := strings.TrimPrefix(internalPath, "/")
 	params := tree_service.NewCreateNodesParams().WithBody(&models.RestCreateNodesRequest{
 		Nodes: []*models.TreeNode{
 			{
@@ -250,15 +270,15 @@ func (self *CellsFuse) Mkdir(path string, mode uint32) int {
 		Atim:  fuse.NewTimespec(now),
 		Nlink: 2,
 	}
-	self.setCache(path, &CacheEntry{
+	self.setCache(internalPath, &CacheEntry{
 		Stat: stat,
 		Node: &models.TreeNode{
-			Path: path,
+			Path: internalPath,
 			Type: models.TreeNodeTypeCOLLECTION.Pointer(),
 		},
 		ExpireAt: time.Now().Add(self.cacheTTL),
 	})
-	parentDir := filepath.Dir(path)
+	parentDir := filepath.Dir(internalPath)
 	self.invalidateCache(parentDir)
 	return 0
 }
@@ -268,8 +288,11 @@ func (self *CellsFuse) Create(path string, flags int, mode uint32) (int, uint64)
 		return -fuse.EOPNOTSUPP, 0
 	}
 	self.Logger("FUSE | Create %s", path)
+
+	internalPath := self.toInternalPath(path)
+
 	// 1. Create a local temporary file to hold the data while it's being written
-	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(path))
+	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
 	self.Logger("PYDIO | temp file: " + tempPath)
 	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
 	if err != nil {
@@ -291,24 +314,25 @@ func (self *CellsFuse) Create(path string, flags int, mode uint32) (int, uint64)
 		Nlink: 1,
 	}
 
-	self.setCache(path, &CacheEntry{
+	self.setCache(internalPath, &CacheEntry{
 		Stat: stat,
 		Node: &models.TreeNode{
-			Path: path,
+			Path: internalPath,
 			Type: models.TreeNodeTypeLEAF.Pointer(),
 		},
 		ExpireAt: time.Now().Add(self.cacheTTL),
 	})
 
 	// 3. Invalidate parent so readdir might pick it up if cached
-	self.invalidateCache(filepath.Dir(path))
+	self.invalidateCache(filepath.Dir(internalPath))
 
 	return 0, 0
 }
 
 func (self *CellsFuse) Write(path string, buff []byte, ofst int64, fh uint64) int {
 	self.Logger("FUSE | Write %s", path)
-	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(path))
+	internalPath := self.toInternalPath(path)
+	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
 
 	// Open the local buffer with O_CREATE to treat missing temp file as new file
 	f, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE, 0644)
@@ -384,9 +408,10 @@ func (self *CellsFuse) Release(path string, fh uint64) int {
 		return -fuse.EOPNOTSUPP
 	}
 	self.Logger("FUSE | Release")
-	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(path))
+	internalPath := self.toInternalPath(path)
+	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
 
-	if isTempFile(path) {
+	if isTempFile(internalPath) {
 		// Just clean up the local disk and return
 		// os.Remove(tempPath) // DO NOT DELETE: Rename execution might need this file
 		return 0
@@ -397,7 +422,7 @@ func (self *CellsFuse) Release(path string, fh uint64) int {
 		return 0
 	}
 
-	fileStat, err := self.uploadLocalToPydio(tempPath, path)
+	fileStat, err := self.uploadLocalToPydio(tempPath, internalPath)
 	if err != nil {
 		self.Logger(fmt.Sprintf("Upload failed: %v\n", err))
 		return -int(fuse.EIO)
@@ -411,10 +436,10 @@ func (self *CellsFuse) Release(path string, fh uint64) int {
 		Ctim: fuse.NewTimespec(fileStat.ModTime()),
 	}
 
-	self.setCache(path, &CacheEntry{
+	self.setCache(internalPath, &CacheEntry{
 		Stat: newStat,
 		Node: &models.TreeNode{
-			Path:  path,
+			Path:  internalPath,
 			Type:  models.TreeNodeTypeLEAF.Pointer(),
 			Size:  strconv.FormatInt(fileStat.Size(), 10),
 			MTime: strconv.FormatInt(fileStat.ModTime().Unix(), 10),
@@ -423,8 +448,8 @@ func (self *CellsFuse) Release(path string, fh uint64) int {
 	})
 
 	// Invalidate parent directory to ensure it shows up in future listings
-	self.invalidateCache(filepath.Dir(path))
-	self.clearReadCache(path)
+	self.invalidateCache(filepath.Dir(internalPath))
+	self.clearReadCache(internalPath)
 
 	// Cleanup temp file
 	os.Remove(tempPath)
@@ -451,12 +476,15 @@ func (self *CellsFuse) Rename(oldpath string, newpath string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if isTempFile(oldpath) {
+	internalOld := self.toInternalPath(oldpath)
+	internalNew := self.toInternalPath(newpath)
+
+	if isTempFile(internalOld) {
 		// Check for local file presence. If found, we treat it as a local-to-remote upload (atomic rename)
-		localPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(oldpath))
+		localPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalOld))
 		if _, err := os.Stat(localPath); err == nil {
 			self.Logger(fmt.Sprintf("Rename: Uploading local temp file %s to %s\n", oldpath, newpath))
-			fileStat, err := self.uploadLocalToPydio(localPath, newpath)
+			fileStat, err := self.uploadLocalToPydio(localPath, internalNew)
 			if err != nil {
 				return -int(fuse.EIO)
 			}
@@ -467,10 +495,10 @@ func (self *CellsFuse) Rename(oldpath string, newpath string) int {
 				Mtim: fuse.NewTimespec(fileStat.ModTime()),
 				Ctim: fuse.NewTimespec(fileStat.ModTime()),
 			}
-			self.setCache(newpath, &CacheEntry{
+			self.setCache(internalNew, &CacheEntry{
 				Stat: newStat,
 				Node: &models.TreeNode{
-					Path:  newpath,
+					Path:  internalNew,
 					Type:  models.TreeNodeTypeLEAF.Pointer(),
 					Size:  strconv.FormatInt(fileStat.Size(), 10),
 					MTime: strconv.FormatInt(fileStat.ModTime().Unix(), 10),
@@ -478,14 +506,14 @@ func (self *CellsFuse) Rename(oldpath string, newpath string) int {
 				ExpireAt: time.Now().Add(CacheTTL),
 			})
 			os.Remove(localPath)
-			self.invalidateCache(filepath.Dir(newpath))
+			self.invalidateCache(filepath.Dir(internalNew))
 			return 0
 		}
 	}
 
 	// 1. Prepare Pydio Paths
-	oldP := strings.TrimPrefix(oldpath, "/")
-	newP := strings.TrimPrefix(newpath, "/")
+	oldP := strings.TrimPrefix(internalOld, "/")
+	newP := strings.TrimPrefix(internalNew, "/")
 
 	// --- GEDIT COMPATIBILITY STEP ---
 	// Check if the target already exists (Nautilus/Gedit atomic save)
@@ -499,7 +527,7 @@ func (self *CellsFuse) Rename(oldpath string, newpath string) int {
 	// If the file exists, we delete it so the rename can "overwrite" it
 	if err == nil && len(statResp.Payload.Nodes) > 0 {
 		self.Logger(fmt.Sprintf("Rename: target %s exists, deleting for atomic replace\n", newpath))
-		if res := self.Unlink(newpath); res != 0 {
+		if res := self.Unlink(internalNew); res != 0 {
 			return res
 		}
 	}
@@ -547,8 +575,8 @@ func (self *CellsFuse) Rename(oldpath string, newpath string) int {
 	}
 
 	// 5. Success - Invalidate caches
-	self.readAheadCache.Delete(oldpath)
-	self.readAheadCache.Delete(newpath)
+	self.readAheadCache.Delete(internalOld)
+	self.readAheadCache.Delete(internalNew)
 
 	return 0
 }
@@ -557,8 +585,11 @@ func (self *CellsFuse) Copy(oldpath string, newpath string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // Copies take longer
 	defer cancel()
 
-	oldP := strings.TrimPrefix(oldpath, "/")
-	newP := strings.TrimPrefix(newpath, "/")
+	internalOld := self.toInternalPath(oldpath)
+	internalNew := self.toInternalPath(newpath)
+
+	oldP := strings.TrimPrefix(internalOld, "/")
+	newP := strings.TrimPrefix(internalNew, "/")
 	targetDir := filepath.Dir(newP)
 
 	// 1. Build JSON parameters for the 'copy' job
@@ -595,7 +626,7 @@ func (self *CellsFuse) Copy(oldpath string, newpath string) int {
 	}
 
 	// 4. Success - Clear cache for the NEW path only
-	self.readAheadCache.Delete(newpath)
+	self.readAheadCache.Delete(internalNew)
 
 	return 0
 }
@@ -676,8 +707,9 @@ func (self *CellsFuse) Fsync(path string, datasync bool, fh uint64) int {
 }
 
 func (self *CellsFuse) Unlink(path string) int {
+	internalPath := self.toInternalPath(path)
 	// 1. Translate path (Remove leading slash)
-	pydioPath := strings.TrimPrefix(path, "/")
+	pydioPath := strings.TrimPrefix(internalPath, "/")
 
 	// 2. Prepare the Delete request
 	// Note: Pydio DeleteNodes takes a list of nodes to delete
@@ -696,8 +728,8 @@ func (self *CellsFuse) Unlink(path string) int {
 
 	// 4. Important: Clear your local metadata/readdir cache here
 	// If you don't, the file might still show up in 'ls' until the cache expires.
-	self.invalidateCache(path)
-	self.clearReadCache(path)
+	self.invalidateCache(internalPath)
+	self.clearReadCache(internalPath)
 
 	return 0
 }
@@ -723,7 +755,8 @@ func (self *CellsFuse) Truncate(path string, size int64, fh uint64) int {
 		return -fuse.EOPNOTSUPP
 	}
 	self.Logger("FUSE | Truncate")
-	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(path))
+	internalPath := self.toInternalPath(path)
+	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
 
 	// Truncate the local temp file to the desired size.
 	// If it doesn't exist, we create it (if size is 0, or extend it).
@@ -741,11 +774,11 @@ func (self *CellsFuse) Truncate(path string, size int64, fh uint64) int {
 	}
 
 	// Update the cache size immediately so invalidation/stat works
-	if entry, ok := self.getCached(path); ok {
+	if entry, ok := self.getCached(internalPath); ok {
 		entry.Stat.Size = size
-		self.setCache(path, entry)
+		self.setCache(internalPath, entry)
 	}
-	self.clearReadCache(path)
+	self.clearReadCache(internalPath)
 
 	return 0
 }
@@ -754,15 +787,16 @@ func (self *CellsFuse) Utimens(path string, tmsp []fuse.Timespec) int {
 	if self.shouldIgnorePath(path) {
 		return -fuse.EOPNOTSUPP
 	}
+	internalPath := self.toInternalPath(path)
 	// Update the local cache with the new times so 'ls -l' shows changes immediately
-	if entry, ok := self.getCached(path); ok {
+	if entry, ok := self.getCached(internalPath); ok {
 		if len(tmsp) > 0 {
 			entry.Stat.Atim = tmsp[0]
 		}
 		if len(tmsp) > 1 {
 			entry.Stat.Mtim = tmsp[1]
 		}
-		self.setCache(path, entry)
+		self.setCache(internalPath, entry)
 	}
 	// We return 0 (success) effectively "swallowing" the time update for the remote server
 	// unless we want to send a metdata update API call to Pydio.
@@ -788,8 +822,10 @@ func (self *CellsFuse) Readdir(path string, fill func(name string, stat *fuse.St
 	fill(".", nil, 0)
 	fill("..", nil, 0)
 
+	internalPath := self.toInternalPath(path)
+
 	// Check cache first
-	if cached, ok := self.getCached(path); ok && cached.Children != nil {
+	if cached, ok := self.getCached(internalPath); ok && cached.Children != nil {
 		for name, stat := range cached.Children {
 			if !fill(name, stat, 0) {
 				break
@@ -803,7 +839,7 @@ func (self *CellsFuse) Readdir(path string, fill func(name string, stat *fuse.St
 	defer cancel()
 
 	params := tree_service.NewBulkStatNodesParams().WithBody(&models.RestGetBulkMetaRequest{
-		NodePaths: []string{path + "/*"},
+		NodePaths: []string{internalPath + "/*"},
 	}).WithContext(ctx)
 
 	result, err := self.TreeService.BulkStatNodes(params)
@@ -833,6 +869,14 @@ func (self *CellsFuse) Readdir(path string, fill func(name string, stat *fuse.St
 			defer func() { <-semaphore }() // Release token
 
 			name := filepath.Base(n.Path)
+			if path == "/" && n.MetaStore != nil {
+				// Display workspaces by label, not slug
+				if label, ok := n.MetaStore["ws_label"]; ok && label != "" {
+					name = strings.Trim(label, "\"")
+					self.workspaceLabels.Store(name, filepath.Base(n.Path))
+				}
+			}
+
 			stat := &fuse.Stat_t{}
 
 			if *n.Type == models.TreeNodeTypeCOLLECTION {
@@ -870,7 +914,7 @@ func (self *CellsFuse) Readdir(path string, fill func(name string, stat *fuse.St
 	wg.Wait()
 
 	// Cache directory contents
-	self.setCache(path, &CacheEntry{
+	self.setCache(internalPath, &CacheEntry{
 		Children: children,
 		Stat:     &fuse.Stat_t{Mode: fuse.S_IFDIR | 0755},
 	})
@@ -886,6 +930,8 @@ func (self *CellsFuse) Readdir(path string, fill func(name string, stat *fuse.St
 
 func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int {
 	self.Logger("READ: path=%s offset=%d size=%d", path, ofst, len(buff))
+	internalPath := self.toInternalPath(path)
+
 	startTime := time.Now()
 	totalRead := 0
 
@@ -895,7 +941,7 @@ func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int
 		chunkIndex := currentOffset / self.readAheadSize
 		chunkOffset := chunkIndex * self.readAheadSize
 		// Use null byte as separator to avoid collisions with filenames
-		cacheKey := fmt.Sprintf("%s\x00%d", path, chunkIndex)
+		cacheKey := fmt.Sprintf("%s\x00%d", internalPath, chunkIndex)
 
 		var data []byte
 		if val, ok := self.readAheadCache.Load(cacheKey); ok {
@@ -903,7 +949,7 @@ func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int
 			self.Logger("CACHE HIT: chunk=%d", chunkIndex)
 			// Trigger prefetch even on cache hits to stay ahead
 			for i := int64(1); i <= self.prefetchAhead; i++ {
-				go self.prefetchChunk(path, chunkIndex+i)
+				go self.prefetchChunk(internalPath, chunkIndex+i)
 			}
 		} else {
 			self.Logger("CACHE MISS: chunk=%d, fetching from S3...", chunkIndex)
@@ -919,7 +965,7 @@ func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int
 			byteRange := fmt.Sprintf("bytes=%d-%d", chunkOffset, chunkOffset+int64(len(data))-1)
 			input := &s3.GetObjectInput{
 				Bucket: aws.String("io"),
-				Key:    aws.String(path),
+				Key:    aws.String(internalPath),
 				Range:  aws.String(byteRange),
 			}
 
@@ -953,13 +999,13 @@ func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int
 
 			// Aggressively prefetch multiple chunks ahead for high-latency connections
 			for i := int64(1); i <= self.prefetchAhead; i++ {
-				go self.prefetchChunk(path, chunkIndex+i)
+				go self.prefetchChunk(internalPath, chunkIndex+i)
 			}
 		}
 
 		// Keep configured number of chunks cached
 		if chunkIndex > self.cacheChunks {
-			self.readAheadCache.Delete(fmt.Sprintf("%s\x00%d", path, chunkIndex-self.cacheChunks))
+			self.readAheadCache.Delete(fmt.Sprintf("%s\x00%d", internalPath, chunkIndex-self.cacheChunks))
 		}
 
 		relativeOffset := currentOffset - chunkOffset
