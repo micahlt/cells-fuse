@@ -25,11 +25,6 @@ func checkAndRefreshToken(session *AppSession) {
 
 	expiry := time.Unix(session.TokenExpiry, 0)
 	if time.Until(expiry) > 15*time.Minute {
-		// No need to refresh yet
-		return
-	}
-	expiry := time.Unix(session.TokenExpiry, 0)
-	if time.Until(expiry) > 15*time.Minute {
 		return
 	}
 
@@ -43,7 +38,6 @@ func checkAndRefreshToken(session *AppSession) {
 	}
 
 	success, err := rest.RefreshJwtToken("cells-sync", conf)
-	success, err := rest.RefreshJwtToken("cells-sync", conf)
 	if err != nil {
 		Log(session, "Error refreshing token: %v", err)
 		return
@@ -54,23 +48,13 @@ func checkAndRefreshToken(session *AppSession) {
 	session.AuthToken = conf.IdToken
 	session.RefreshToken = conf.RefreshToken
 	session.TokenExpiry = int64(conf.TokenExpiresAt)
-	session.AuthToken = conf.IdToken
-	session.RefreshToken = conf.RefreshToken
-	session.TokenExpiry = int64(conf.TokenExpiresAt)
 
 	Log(session, "Token refreshed! New expiry: %v", time.Unix(session.TokenExpiry, 0))
 
 	if err := SaveConfig(session); err != nil {
 		Log(session, "Error saving config after refresh: %v", err)
 	}
-	if err := SaveConfig(session); err != nil {
-		Log(session, "Error saving config after refresh: %v", err)
-	}
 
-	if session.CellsFuse != nil {
-		Log(session, "Updating FUSE clients with new token...")
-		session.CellsFuse.UpdateClients(session)
-	}
 	if session.CellsFuse != nil {
 		Log(session, "Updating FUSE clients with new token...")
 		session.CellsFuse.UpdateClients(session)

@@ -55,7 +55,7 @@ func main() {
 		fmt.Printf("Warning: could not load config: %v\n", err)
 	}
 
-	mountSignal := make(chan bool)
+	mountSignal := make(chan bool, 1)
 	go runFuseBackground(session, mountSignal)
 
 	startTokenRefresher(session)

@@ -63,7 +63,7 @@ type CellsFuse struct {
 }
 
 func createApiClient(session AppSession) *apiV1Client.PydioCellsRestAPI {
-	Log(&session, "DEBUG: Creating API client with URL=%s, Token=%s...", session.AppUrl, session.AuthToken[:min(20, len(session.AuthToken))])
+	Log(&session, "DEBUG | Creating API client with URL=%s, Token=%s...", session.AppUrl, session.AuthToken[:min(20, len(session.AuthToken))])
 	conf := &apiv1.SdkConfig{
 		Url:        session.AppUrl,
 		SkipVerify: false,
@@ -74,12 +74,12 @@ func createApiClient(session AppSession) *apiV1Client.PydioCellsRestAPI {
 		Log(&session, "Error creating API client: %v", err)
 		os.Exit(1)
 	}
-	Log(&session, "DEBUG: API client created successfully")
+	Log(&session, "DEBUG | API client created successfully")
 	return rClient
 }
 
 func createS3Client(session AppSession) *s3.Client {
-	Log(&session, "DEBUG: Creating S3 client with URL=%s", session.AppUrl)
+	Log(&session, "DEBUG | Creating S3 client with URL=%s", session.AppUrl)
 	// Create a custom resolver to point the S3 client to our specific Pydio Cells URL
 	// instead of AWS servers.
 	customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
@@ -992,9 +992,9 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 		case shouldMount := <-mountSignal:
 			if shouldMount && session.FuseHost == nil {
 				Log(session, "Mounting Pydio Cells...")
-				Log(session, "DEBUG FUSE: Using AppUrl=%s", session.AppUrl)
-				Log(session, "DEBUG FUSE: Token length=%d", len(session.AuthToken))
-				Log(session, "DEBUG FUSE: Full token: %s", session.AuthToken)
+				Log(session, "DEBUG | Using AppUrl=%s", session.AppUrl)
+				Log(session, "DEBUG | Token length=%d", len(session.AuthToken))
+				Log(session, "DEBUG | Full token: %s", session.AuthToken)
 
 				// Initialize your fuse implementation
 				cf := &CellsFuse{
@@ -1019,11 +1019,17 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 
 				session.IsMounted = true
 
-			} else if !shouldMount && session.IsMounted {
+			} else if !shouldMount {
 				Log(session, "Unmounting by GUI request...")
 				if session.FuseHost != nil {
-					session.FuseHost.Unmount()
+					Log(session, "Calling Unmount()...")
+					result := session.FuseHost.Unmount()
+					Log(session, "Unmount returned: %v", result)
+					if !result {
+						Log(session, "Unmount failed, filesystem may still be busy")
+					}
 				}
+				session.IsMounted = false
 			}
 
 		case <-done:

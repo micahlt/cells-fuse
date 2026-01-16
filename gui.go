@@ -71,9 +71,8 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 
 		if session.IsMounted {
 			mountSignal <- false
-			session.IsMounted = false
 			mountBtn.SetLabel("Start FUSE")
-			statusLabel.SetText("FUSE stopped")
+			statusLabel.SetText("FUSE stopping...")
 		} else {
 			if session.AuthToken != "" {
 				if session.MountPoint == "" {
@@ -81,9 +80,8 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 					return
 				}
 				mountSignal <- true
-				session.IsMounted = true
 				mountBtn.SetLabel("Stop FUSE")
-				statusLabel.SetText("FUSE started")
+				statusLabel.SetText("FUSE starting...")
 			} else {
 				statusLabel.SetText("Please authenticate first")
 			}
