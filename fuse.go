@@ -168,9 +168,14 @@ func (self *CellsFuse) toInternalPath(path string) string {
 	label := parts[0]
 	if slug, ok := self.workspaceLabels.Load(label); ok {
 		parts[0] = slug.(string)
-		return "/" + strings.Join(parts, "/")
 	}
-	return path
+
+	for i, part := range parts {
+		if part == ".recycle_bin" {
+			parts[i] = "recycle_bin"
+		}
+	}
+	return "/" + strings.Join(parts, "/")
 }
 
 func (self *CellsFuse) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
@@ -875,6 +880,10 @@ func (self *CellsFuse) Readdir(path string, fill func(name string, stat *fuse.St
 					name = strings.Trim(label, "\"")
 					self.workspaceLabels.Store(name, filepath.Base(n.Path))
 				}
+			}
+
+			if name == "recycle_bin" {
+				name = ".recycle_bin"
 			}
 
 			stat := &fuse.Stat_t{}
