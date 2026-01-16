@@ -14,19 +14,20 @@ import (
 )
 
 type AppSession struct {
-	PydioClient      *client.PydioCellsRestAPI
-	AuthToken        string
-	AppUrl           string
-	S3Client         *s3.Client
-	IsMounted        bool
-	MountPoint       string
-	FuseHost         *fuse.FileSystemHost
-	RefreshToken     string
-	TokenExpiry      int64
-	User             string
-	CellsFuse        *CellsFuse
-	TrayUpdateSignal chan bool
-	LogChannel       chan string
+	PydioClient       *client.PydioCellsRestAPI
+	AuthToken         string
+	AppUrl            string
+	S3Client          *s3.Client
+	IsMounted         bool
+	MountPoint        string
+	FuseHost          *fuse.FileSystemHost
+	RefreshToken      string
+	TokenExpiry       int64
+	User              string
+	CellsFuse         *CellsFuse
+	TrayUpdateSignal  chan bool
+	LogChannel        chan string
+	MountErrorChannel chan string
 }
 
 const AppID = "com.micahlindley.cells-fuse"
@@ -46,9 +47,10 @@ func main() {
 	fmt.Println("Hello world")
 
 	session := &AppSession{
-		MountPoint:       "~/cells",
-		TrayUpdateSignal: make(chan bool, 1),
-		LogChannel:       make(chan string, 100),
+		MountPoint:        "~/cells",
+		TrayUpdateSignal:  make(chan bool, 1),
+		LogChannel:        make(chan string, 100),
+		MountErrorChannel: make(chan string, 1),
 	}
 
 	if err := LoadConfig(session); err != nil {

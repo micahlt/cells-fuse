@@ -1013,6 +1013,10 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 					if !success {
 						Log(session, "FUSE Mount failed.")
 						session.IsMounted = false
+						select {
+						case session.MountErrorChannel <- "Failed to mount FUSE filesystem. Check that the mount point exists and is not already in use.":
+						default:
+						}
 					}
 					done <- true
 				}()

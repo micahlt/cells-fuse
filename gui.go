@@ -17,7 +17,7 @@ var logoData []byte
 
 func createMainWindow(app *gtk.Application, session *AppSession, mountSignal chan bool) *gtk.ApplicationWindow {
 	window := gtk.NewApplicationWindow(app)
-	window.SetTitle("Pydio Cells")
+	window.SetTitle("Cells Fuse")
 	window.SetDefaultSize(400, 300)
 
 	box := gtk.NewBox(gtk.OrientationVertical, 10)
@@ -159,6 +159,26 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 				// Auto-scroll
 				mark := buffer.CreateMark("end", end, false)
 				logView.ScrollMarkOnscreen(mark)
+				return false
+			})
+		}
+	}()
+
+	go func() {
+		for errMsg := range session.MountErrorChannel {
+			message := errMsg
+			glib.IdleAdd(func() bool {
+				mountBtn.SetLabel("Start FUSE")
+				statusLabel.SetText("Mount failed")
+
+				alertDialog := gtk.NewMessageDialog(window.Application().ActiveWindow(), gtk.DialogDestroyWithParent, gtk.MessageError, gtk.ButtonsClose)
+				alertDialog.SetMarkup(message)
+				alertDialog.SetModal(true)
+				alertDialog.SetTitle("Error")
+				alertDialog.ConnectResponse(func(responseID int) {
+					alertDialog.Destroy()
+				})
+				alertDialog.SetVisible(true)
 				return false
 			})
 		}
