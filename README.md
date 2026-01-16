@@ -17,4 +17,4 @@ Download the latest binary from the [releases page](https://github.com/micahlt/c
 
 ### Development
 
-Both the frontend and backend are written in Go, thanks to [cgofuse](https://github.com/winfsp/cgofuse) and [gotk4](https://github.com/diamondburned/gotk4/pkg).  Development should be as simple as installing those packages' dependencies and then running `go run .`.  The first run may take a while while the GTK4 dependencies compile.
+Both the frontend and backend are written in Go, thanks to [cgofuse](https://github.com/winfsp/cgofuse) and [gotk4](https://github.com/diamondburned/gotk4).  Development should be as simple as installing those packages' dependencies and then running `go run .`.  The first run may take a while while the GTK4 dependencies compile.
