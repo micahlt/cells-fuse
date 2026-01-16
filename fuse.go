@@ -1017,11 +1017,19 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 						case session.MountErrorChannel <- "Failed to mount FUSE filesystem. Check that the mount point exists and is not already in use.":
 						default:
 						}
+						select {
+						case session.TrayUpdateSignal <- true:
+						default:
+						}
 					}
 					done <- true
 				}()
 
 				session.IsMounted = true
+				select {
+				case session.TrayUpdateSignal <- true:
+				default:
+				}
 
 			} else if !shouldMount {
 				Log(session, "Unmounting by GUI request...")
@@ -1034,12 +1042,20 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 					}
 				}
 				session.IsMounted = false
+				select {
+				case session.TrayUpdateSignal <- true:
+				default:
+				}
 			}
 
 		case <-done:
 			Log(session, "FUSE process exited.")
 			session.IsMounted = false
 			session.FuseHost = nil
+			select {
+			case session.TrayUpdateSignal <- true:
+			default:
+			}
 		}
 	}
 }

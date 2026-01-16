@@ -98,7 +98,7 @@ func main() {
 		if mainWindow == nil {
 			mainWindow = createMainWindow(app, session, mountSignal)
 		}
-		mainWindow.Show()
+		mainWindow.SetVisible(true)
 	})
 
 	if code := app.Run(os.Args); code > 0 {

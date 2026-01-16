@@ -184,6 +184,21 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 		}
 	}()
 
+	go func() {
+		for range session.TrayUpdateSignal {
+			glib.IdleAdd(func() bool {
+				if session.IsMounted {
+					mountBtn.SetLabel("Stop FUSE")
+					statusLabel.SetText("FUSE mounted")
+				} else {
+					mountBtn.SetLabel("Start FUSE")
+					statusLabel.SetText("Ready")
+				}
+				return false
+			})
+		}
+	}()
+
 	window.ConnectCloseRequest(func() bool {
 		window.SetVisible(false)
 		// Return true to stop other handlers (like destruction)
