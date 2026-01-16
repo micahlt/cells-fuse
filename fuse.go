@@ -36,139 +36,12 @@ const (
 	ReadAheadSize     = 1024 * 1024 * 4 // 4MB chunks for high-latency connections
 	PrefetchAhead     = 10              // Prefetch 10 chunks ahead (~40MB buffer)
 	MaxWorkers        = 20
-	PrefetchQueueSize = 100 // Max pending prefetch tasks per worker pool
+	PrefetchQueueSize = 100                    // Max pending prefetch tasks per worker pool
+	DefaultMaxCacheGB = 1                      // Default 1GB max cache size
+	CacheEvictionTick = 500 * time.Millisecond // Period to check cache size
 )
 
 var IgnoredPaths = []string{".hidden", ".Trash", ".Trash-1000", "autorun.inf", ".xdg-volume-info"}
-
-// a single S3 range read request to be processed by the worker pool
-type PrefetchTask struct {
-	Path       string
-	ChunkIndex int64
-}
-
-// PrefetchWorkerPool manages bounded concurrent prefetch requests with deduplication.
-// It spawns maxWorkers goroutines that consume tasks from a queue, preventing unbounded
-// goroutine creation while maintaining the prefetchActive deduplication mechanism.
-type PrefetchWorkerPool struct {
-	taskQueue      chan PrefetchTask
-	maxWorkers     int
-	activeSet      sync.Map       // Tracks which chunks are being prefetched (cacheKey -> bool)
-	done           chan struct{}  // Signal to shut down workers
-	wg             sync.WaitGroup // Waits for workers to finish before close
-	s3Client       *s3.Client     // S3 client for fetching chunks
-	readAheadCache *sync.Map      // Reference to parent's read-ahead cache
-	readAheadSize  int64          // Size of each chunk
-	logger         func(string, ...interface{})
-}
-
-func NewPrefetchWorkerPool(
-	maxWorkers int, // maximum number of concurrent S3 reads
-	queueSize int, // limit queue size
-	s3Client *s3.Client,
-	readAheadCache *sync.Map,
-	readAheadSize int64,
-	logger func(string, ...interface{}),
-) *PrefetchWorkerPool {
-	pool := &PrefetchWorkerPool{
-		taskQueue:      make(chan PrefetchTask, queueSize),
-		maxWorkers:     maxWorkers,
-		done:           make(chan struct{}),
-		s3Client:       s3Client,
-		readAheadCache: readAheadCache,
-		readAheadSize:  readAheadSize,
-		logger:         logger,
-	}
-
-	// Start maxWorkers goroutines, each consuming from the shared task queue.
-	for i := 0; i < maxWorkers; i++ {
-		pool.wg.Add(1)
-		go pool.worker(i)
-	}
-
-	return pool
-}
-
-// worker that processes prefetch tasks from the queue
-func (p *PrefetchWorkerPool) worker(id int) {
-	defer p.wg.Done()
-	for {
-		select {
-		case task, ok := <-p.taskQueue:
-			if !ok {
-				return
-			}
-			p.processPrefetchTask(task)
-		case <-p.done:
-			return
-		}
-	}
-}
-
-// fetches a single chunk from S3 and caches it
-func (p *PrefetchWorkerPool) processPrefetchTask(task PrefetchTask) {
-	cacheKey := fmt.Sprintf("%s\x00%d", task.Path, task.ChunkIndex)
-
-	// Skip if already cached
-	if _, exists := p.readAheadCache.Load(cacheKey); exists {
-		return
-	}
-
-	// dedupe if already being prefetched by another worker
-	if _, active := p.activeSet.LoadOrStore(cacheKey, true); active {
-		return
-	}
-	defer p.activeSet.Delete(cacheKey)
-
-	data := make([]byte, p.readAheadSize)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	chunkOffset := task.ChunkIndex * p.readAheadSize
-	byteRange := fmt.Sprintf("bytes=%d-%d", chunkOffset, chunkOffset+int64(len(data))-1)
-
-	output, err := p.s3Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String("io"),
-		Key:    aws.String(task.Path),
-		Range:  aws.String(byteRange),
-	})
-
-	if err != nil {
-		return
-	}
-
-	n, err := io.ReadFull(output.Body, data)
-	output.Body.Close()
-
-	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		return
-	}
-
-	data = data[:n]
-	p.readAheadCache.Store(cacheKey, data)
-	p.logger("PREFETCH: chunk=%d bytes=%d", task.ChunkIndex, n)
-}
-
-// enqueues a prefetch task if not already cached or being fetched
-func (p *PrefetchWorkerPool) SubmitPrefetch(path string, chunkIndex int64) {
-	cacheKey := fmt.Sprintf("%s\x00%d", path, chunkIndex)
-
-	if _, exists := p.readAheadCache.Load(cacheKey); exists {
-		return
-	}
-	select {
-	case p.taskQueue <- PrefetchTask{Path: path, ChunkIndex: chunkIndex}:
-		// Task enqueued successfully
-	default:
-		// Queue is full, drop the task to prevent blocking
-	}
-}
-
-func (p *PrefetchWorkerPool) Shutdown() {
-	close(p.done)
-	close(p.taskQueue)
-	p.wg.Wait()
-}
 
 type CacheEntry struct {
 	Stat     *fuse.Stat_t
@@ -181,7 +54,7 @@ type CellsFuse struct {
 	fuse.FileSystemBase
 	S3Client        *s3.Client
 	metadataCache   sync.Map
-	readAheadCache  sync.Map
+	readAheadCache  *LRUChunkCache // Bounded LRU cache for read-ahead chunks
 	workspaceLabels sync.Map
 	Logger          func(string, ...interface{})
 	*apiV1Client.PydioCellsRestAPI
@@ -190,6 +63,7 @@ type CellsFuse struct {
 	prefetchAhead int64
 	cacheChunks   int64
 	cacheTTL      time.Duration
+	maxCacheBytes int64 // Maximum bytes for read-ahead cache
 	prefetchPool  *PrefetchWorkerPool
 }
 
@@ -500,16 +374,9 @@ func (self *CellsFuse) Write(path string, buff []byte, ofst int64, fh uint64) in
 }
 
 func (self *CellsFuse) clearReadCache(path string) {
-	// iterate and delete any cache keys belonging to this path
+	// Clear all cached chunks belonging to this path using the LRU cache API
 	prefix := path + "\x00"
-	self.readAheadCache.Range(func(key, value interface{}) bool {
-		if k, ok := key.(string); ok {
-			if strings.HasPrefix(k, prefix) {
-				self.readAheadCache.Delete(key)
-			}
-		}
-		return true
-	})
+	self.readAheadCache.DeletePrefix(prefix)
 }
 
 func (self *CellsFuse) uploadLocalToPydio(localPath string, pydioPath string) (os.FileInfo, error) {
@@ -1127,8 +994,8 @@ func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int
 		cacheKey := fmt.Sprintf("%s\x00%d", internalPath, chunkIndex)
 
 		var data []byte
-		if val, ok := self.readAheadCache.Load(cacheKey); ok {
-			data = val.([]byte)
+		if val, ok := self.readAheadCache.Get(cacheKey); ok {
+			data = val
 			self.Logger("CACHE HIT: chunk=%d", chunkIndex)
 			// Trigger prefetch even on cache hits to stay ahead using worker pool
 			for i := int64(1); i <= self.prefetchAhead; i++ {
@@ -1178,17 +1045,12 @@ func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int
 
 			// Resize slice to actual read count
 			data = data[:n]
-			self.readAheadCache.Store(cacheKey, data)
+			self.readAheadCache.Put(cacheKey, data)
 
 			// Aggressively prefetch multiple chunks ahead for high-latency connections using worker pool
 			for i := int64(1); i <= self.prefetchAhead; i++ {
 				self.prefetchPool.SubmitPrefetch(internalPath, chunkIndex+i)
 			}
-		}
-
-		// Keep configured number of chunks cached
-		if chunkIndex > self.cacheChunks {
-			self.readAheadCache.Delete(fmt.Sprintf("%s\x00%d", internalPath, chunkIndex-self.cacheChunks))
 		}
 
 		relativeOffset := currentOffset - chunkOffset
@@ -1243,17 +1105,26 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 				s3Client := createS3Client(*session)
 				apiClient := createApiClient(*session)
 
-				// Initialize your fuse implementation
+				// Create logger function
+				loggerFunc := func(format string, args ...interface{}) {
+					Log(session, format, args...)
+				}
+
+				// Initialize the bounded LRU cache for read-ahead chunks
+				maxCacheBytes := int64(DefaultMaxCacheGB) * 1024 * 1024 * 1024
+				readAheadCache := NewLRUChunkCache(maxCacheBytes, loggerFunc)
+
+				// Initialize FUSE implementation
 				cf := &CellsFuse{
 					S3Client:          s3Client,
 					PydioCellsRestAPI: apiClient,
-					Logger: func(format string, args ...interface{}) {
-						Log(session, format, args...)
-					},
-					readAheadSize: int64(session.ChunkSizeMB) * 1024 * 1024,
-					prefetchAhead: int64(session.PrefetchChunks),
-					cacheChunks:   int64(session.CacheChunks),
-					cacheTTL:      time.Duration(session.CacheTTLSeconds) * time.Second,
+					Logger:            loggerFunc,
+					readAheadSize:     int64(session.ChunkSizeMB) * 1024 * 1024,
+					prefetchAhead:     int64(session.PrefetchChunks),
+					cacheChunks:       int64(session.CacheChunks),
+					cacheTTL:          time.Duration(session.CacheTTLSeconds) * time.Second,
+					maxCacheBytes:     maxCacheBytes,
+					readAheadCache:    readAheadCache,
 				}
 
 				// Initialize the bounded worker pool for prefetch requests
@@ -1261,7 +1132,7 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 					MaxWorkers,
 					PrefetchQueueSize,
 					s3Client,
-					&cf.readAheadCache,
+					readAheadCache,
 					cf.readAheadSize,
 					cf.Logger,
 				)
@@ -1296,10 +1167,16 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 			} else if !shouldMount {
 				Log(session, "Unmounting by GUI request...")
 				if session.FuseHost != nil {
-					// Gracefully shut down the prefetch worker pool before unmounting
-					if session.CellsFuse != nil && session.CellsFuse.prefetchPool != nil {
-						Log(session, "Shutting down prefetch worker pool...")
-						session.CellsFuse.prefetchPool.Shutdown()
+					// Gracefully shut down the worker pool and cache before unmounting
+					if session.CellsFuse != nil {
+						if session.CellsFuse.prefetchPool != nil {
+							Log(session, "Shutting down prefetch worker pool...")
+							session.CellsFuse.prefetchPool.Shutdown()
+						}
+						if session.CellsFuse.readAheadCache != nil {
+							Log(session, "Shutting down read-ahead cache...")
+							session.CellsFuse.readAheadCache.Shutdown()
+						}
 					}
 
 					Log(session, "Calling Unmount()...")
