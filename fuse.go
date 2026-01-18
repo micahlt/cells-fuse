@@ -242,28 +242,31 @@ func (self *CellsFuse) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	if result.IsSuccess() {
 		node := result.GetPayload().Node
 
-		// Map Pydio node types to FUSE modes
+		stat.Uid = 0
+		stat.Gid = 0
 		if *node.Type == models.TreeNodeTypeCOLLECTION {
-			stat.Mode = fuse.S_IFDIR | 0755 // Directory
+			stat.Mode = fuse.S_IFDIR | 0777 // Directory
 		} else {
-			stat.Mode = fuse.S_IFREG | 0644 // Regular file
-			if node.MTime != "" {
-				mtime, err := strconv.ParseInt(node.MTime, 10, 64)
-				if err == nil {
-					stat.Mtim = fuse.NewTimespec(time.Unix(mtime, 0))
-				} else {
-					self.Logger("Error parsing MTime: %v", err)
-				}
-			}
-			if node.Size != "" {
-				size, err := strconv.ParseUint(node.Size, 10, 64)
-				if err != nil {
-					self.Logger("Error formatting size: %v", err)
-					return -fuse.ENOENT
-				}
-				stat.Size = int64(size)
+			stat.Mode = fuse.S_IFREG | 0777 // Regular file
+		}
+
+		if node.MTime != "" {
+			mtime, err := strconv.ParseInt(node.MTime, 10, 64)
+			if err == nil {
+				stat.Mtim = fuse.NewTimespec(time.Unix(mtime, 0))
+			} else {
+				self.Logger("Error parsing MTime: %v", err)
 			}
 		}
+		if node.Size != "" {
+			size, err := strconv.ParseUint(node.Size, 10, 64)
+			if err != nil {
+				self.Logger("Error formatting size: %v", err)
+				return -fuse.ENOENT
+			}
+			stat.Size = int64(size)
+		}
+
 		// Cache the result
 		self.setCache(internalPath, &CacheEntry{
 			Stat: stat,
@@ -332,7 +335,7 @@ func (self *CellsFuse) Create(path string, flags int, mode uint32) (int, uint64)
 	// 1. Create and open a local temporary file to hold the data while it's being written
 	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
 	self.Logger("PYDIO | temp file: " + tempPath)
-	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
+	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0777)
 	if err != nil {
 		self.Logger("OS | " + err.Error())
 		return -int(fuse.EIO), 0
@@ -389,7 +392,7 @@ func (self *CellsFuse) Write(path string, buff []byte, ofst int64, fh uint64) in
 		// File handle not found - this shouldn't happen in normal operation
 		// Fall back to opening the file directly (for compatibility)
 		tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
-		f, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE, 0644)
+		f, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE, 0777)
 		if err != nil {
 			self.Logger("OS | Write fallback error: " + err.Error())
 			return -int(fuse.EIO)
@@ -501,7 +504,7 @@ func (self *CellsFuse) Release(path string, fh uint64) int {
 
 	// Update cache with the new file details so subsequent Getattr calls succeed
 	newStat := &fuse.Stat_t{
-		Mode: fuse.S_IFREG | 0644,
+		Mode: fuse.S_IFREG | 0777,
 		Size: fileStat.Size(),
 		Mtim: fuse.NewTimespec(fileStat.ModTime()),
 		Ctim: fuse.NewTimespec(fileStat.ModTime()),
@@ -567,7 +570,7 @@ func (self *CellsFuse) Rename(oldpath string, newpath string) int {
 			}
 			// Update cache for the new path
 			newStat := &fuse.Stat_t{
-				Mode: fuse.S_IFREG | 0644,
+				Mode: fuse.S_IFREG | 0777,
 				Size: fileStat.Size(),
 				Mtim: fuse.NewTimespec(fileStat.ModTime()),
 				Ctim: fuse.NewTimespec(fileStat.ModTime()),
@@ -825,6 +828,49 @@ func (self *CellsFuse) Unlink(path string) int {
 	return 0
 }
 
+func (self *CellsFuse) Rmdir(path string) int {
+	internalPath, errCode := self.beginOp("Rmdir", path, self.logConfig["Rmdir"])
+	if errCode != 0 {
+		return errCode
+	}
+
+	// Verify the directory is empty before attempting delete to comply with what rmdir is supposed to do
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	statParams := tree_service.NewBulkStatNodesParams().WithBody(&models.RestGetBulkMetaRequest{
+		NodePaths: []string{internalPath + "/*"},
+	}).WithContext(ctx)
+
+	statResp, err := self.TreeService.BulkStatNodes(statParams)
+	if err != nil {
+		self.Logger(fmt.Sprintf("Rmdir BulkStatNodes error for %s: %v\n", path, err))
+		return -int(fuse.EIO)
+	}
+
+	if statResp.Payload != nil && len(statResp.Payload.Nodes) > 0 {
+		// Directory not empty
+		return -int(fuse.ENOTEMPTY)
+	}
+
+	// Safe to delete
+	pydioPath := strings.TrimPrefix(internalPath, "/")
+	params := tree_service.NewDeleteNodesParams().WithBody(&models.RestDeleteNodesRequest{
+		Nodes: []*models.TreeNode{{Path: pydioPath}},
+	})
+
+	_, err = self.TreeService.DeleteNodes(params)
+	if err != nil {
+		self.Logger(fmt.Sprintf("Rmdir Delete Error for %s: %v\n", path, err))
+		return -int(fuse.EIO)
+	}
+
+	self.invalidateCache(internalPath)
+	self.clearReadCache(internalPath)
+
+	return 0
+}
+
 func (self *CellsFuse) Open(path string, flags int) (int, uint64) {
 	internalPath, errCode := self.beginOp("Open", "", self.logConfig["Open"])
 	if errCode != 0 {
@@ -844,7 +890,7 @@ func (self *CellsFuse) Open(path string, flags int) (int, uint64) {
 			openFlags |= os.O_TRUNC
 		}
 
-		f, err := os.OpenFile(tempPath, openFlags|os.O_CREATE, 0644)
+		f, err := os.OpenFile(tempPath, openFlags|os.O_CREATE, 0777)
 		if err != nil {
 			self.Logger("OS | Open error: " + err.Error())
 			return -int(fuse.EIO), 0
@@ -901,7 +947,7 @@ func (self *CellsFuse) Truncate(path string, size int64, fh uint64) int {
 	// Fall back to opening the file if no handle is available
 	tempPath := filepath.Join(os.TempDir(), "cells-"+url.PathEscape(internalPath))
 
-	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_RDWR, 0644)
+	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_RDWR, 0777)
 	if err != nil {
 		self.Logger("OS | Truncate Open Error: " + err.Error())
 		return -int(fuse.EIO)
@@ -1037,7 +1083,7 @@ func (self *CellsFuse) Readdir(path string, fill func(name string, stat *fuse.St
 			if *n.Type == models.TreeNodeTypeCOLLECTION {
 				stat.Mode = fuse.S_IFDIR | 0755
 			} else {
-				stat.Mode = fuse.S_IFREG | 0644
+				stat.Mode = fuse.S_IFREG | 0777
 				if n.Size != "" {
 					size, err := strconv.ParseUint(n.Size, 10, 64)
 					if err == nil {
@@ -1267,7 +1313,12 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 
 				go func() {
 					finalMountPoint := expandPath(session.MountPoint)
-					success := session.FuseHost.Mount(finalMountPoint, []string{})
+					success := session.FuseHost.Mount(finalMountPoint, []string{
+						"-o", "fsname=pydio_cells",
+						"-o", "umask=0000",
+						"-o", "uid=-1",
+						"-o", "gid=-1",
+					})
 					if !success {
 						Log(session, "FUSE Mount failed.")
 						session.IsMounted = false

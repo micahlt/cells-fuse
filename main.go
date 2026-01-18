@@ -55,6 +55,7 @@ var initialLogConfig = map[string]bool{
 	"Readdir":  false,
 	"Read":     false,
 	"Statfs":   false,
+	"Rmdir":    false,
 }
 
 const AppID = "com.micahlindley.cells-fuse"
