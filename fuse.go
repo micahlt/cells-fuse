@@ -205,6 +205,11 @@ func (self *CellsFuse) beginOp(op string, path string, shouldLog bool) (string, 
 	return self.toInternalPath(path), 0
 }
 
+func (self *CellsFuse) Access(path string, mask uint32) int {
+	// Pretty sure that Cells doesn't support granular permissions, so this should be fine
+	return 0
+}
+
 func (self *CellsFuse) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	internalPath, errCode := self.beginOp("Getattr", path, self.logConfig["Getattr"])
 	if errCode != 0 {
@@ -958,10 +963,13 @@ func (self *CellsFuse) Chown(path string, uid uint32, gid uint32) int {
 }
 
 func (self *CellsFuse) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) int {
+	_, errCode := self.beginOp("Readdir", path, self.logConfig["Readdir"])
+	if errCode != 0 {
+		return errCode
+	}
 	if self.shouldIgnorePath(path) {
 		return -fuse.EOPNOTSUPP
 	}
-	self.Logger("FUSE | Readdir")
 	fill(".", nil, 0)
 	fill("..", nil, 0)
 

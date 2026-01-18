@@ -36,7 +36,7 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 	about.SetLicenseType(gtk.LicenseGPL30)
 	about.SetWebsite("https://github.com/micahlt/cells-fuse")
 	about.SetWebsiteLabel("GitHub repository")
-	about.SetVersion("1.0.0")
+	about.SetVersion("1.1.3")
 	about.ConnectCloseRequest(func() bool {
 		about.SetVisible(false)
 		return true
