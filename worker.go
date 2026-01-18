@@ -125,7 +125,7 @@ func (p *PrefetchWorkerPool) processPrefetchTask(task PrefetchTask) {
 
 	data = data[:n]
 	p.readAheadCache.Put(cacheKey, data)
-	p.logger("PREFETCH: chunk=%d bytes=%d", task.ChunkIndex, n)
+	// p.logger("PREFETCH: chunk=%d bytes=%d", task.ChunkIndex, n)
 }
 
 // SubmitPrefetch enqueues a prefetch task if not already cached or being fetched.
