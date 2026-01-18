@@ -1313,6 +1313,7 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 
 				go func() {
 					finalMountPoint := expandPath(session.MountPoint)
+					session.FuseHost.SetCapCaseInsensitive(true)
 					success := session.FuseHost.Mount(finalMountPoint, []string{
 						"-o", "fsname=pydio_cells",
 						"-o", "umask=0000",
