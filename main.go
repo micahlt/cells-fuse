@@ -27,12 +27,33 @@ type AppSession struct {
 	CellsFuse         *CellsFuse
 	TrayUpdateSignal  chan bool
 	LogChannel        chan string
+	LogConfig         map[string]bool
 	MountErrorChannel chan string
 	// Performance tuning parameters
 	ChunkSizeMB     int `json:"ChunkSizeMB"`     // ReadAheadSize in MB
 	PrefetchChunks  int `json:"PrefetchChunks"`  // How many chunks to prefetch ahead
 	CacheChunks     int `json:"CacheChunks"`     // How many chunks to keep in cache
 	CacheTTLSeconds int `json:"CacheTTLSeconds"` // Metadata cache TTL in seconds
+}
+
+var initialLogConfig = map[string]bool{
+	"Getattr":  false,
+	"Mkdir":    true,
+	"Create":   true,
+	"Write":    false,
+	"Release":  true,
+	"Rename":   true,
+	"Copy":     true,
+	"Fsync":    false,
+	"Unlink":   true,
+	"Open":     false,
+	"Truncate": false,
+	"Utimens":  false,
+	"Chmod":    false,
+	"Chown":    false,
+	"Readdir":  false,
+	"Read":     false,
+	"Statfs":   false,
 }
 
 const AppID = "com.micahlindley.cells-fuse"
@@ -51,11 +72,17 @@ func Log(session *AppSession, format string, args ...interface{}) {
 func main() {
 	fmt.Println("Hello world")
 
+	logConfig := make(map[string]bool)
+	for k, v := range initialLogConfig {
+		logConfig[k] = v
+	}
+
 	session := &AppSession{
 		MountPoint:        "~/cells",
 		TrayUpdateSignal:  make(chan bool, 1),
 		LogChannel:        make(chan string, 100),
 		MountErrorChannel: make(chan string, 1),
+		LogConfig:         logConfig,
 		// Default performance settings
 		ChunkSizeMB:     4,
 		PrefetchChunks:  10,
@@ -65,6 +92,10 @@ func main() {
 
 	if err := LoadConfig(session); err != nil {
 		fmt.Printf("Warning: could not load config: %v\n", err)
+	}
+
+	if err := SaveConfig(session); err != nil {
+		fmt.Printf("Warning: could not save config: %v\n", err)
 	}
 
 	mountSignal := make(chan bool, 1)

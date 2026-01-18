@@ -60,12 +60,13 @@ type OpenFileHandle struct {
 
 type CellsFuse struct {
 	fuse.FileSystemBase
+	*apiV1Client.PydioCellsRestAPI
 	S3Client        *s3.Client
 	metadataCache   sync.Map
 	readAheadCache  *LRUChunkCache // Bounded LRU cache for read-ahead chunks
 	workspaceLabels sync.Map
 	Logger          func(string, ...interface{})
-	*apiV1Client.PydioCellsRestAPI
+	logConfig       map[string]bool
 	// Configurable performance parameters
 	readAheadSize int64
 	prefetchAhead int64
@@ -194,18 +195,18 @@ func (self *CellsFuse) toInternalPath(path string) string {
 	return "/" + strings.Join(parts, "/")
 }
 
-func (self *CellsFuse) beginOp(op string, path string) (string, int) {
+func (self *CellsFuse) beginOp(op string, path string, shouldLog bool) (string, int) {
 	if self.shouldIgnorePath(path) {
 		return "", -fuse.EOPNOTSUPP
 	}
-	if op != "" {
+	if op != "" && shouldLog {
 		self.Logger("FUSE | %s %s", op, path)
 	}
 	return self.toInternalPath(path), 0
 }
 
 func (self *CellsFuse) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
-	internalPath, errCode := self.beginOp("Getattr", path)
+	internalPath, errCode := self.beginOp("Getattr", path, self.logConfig["Getattr"])
 	if errCode != 0 {
 		return errCode
 	}
@@ -270,7 +271,7 @@ func (self *CellsFuse) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 }
 
 func (self *CellsFuse) Mkdir(path string, mode uint32) int {
-	internalPath, errCode := self.beginOp("Mkdir", path)
+	internalPath, errCode := self.beginOp("Mkdir", path, self.logConfig["Mkdir"])
 	if errCode != 0 {
 		return errCode
 	}
@@ -318,7 +319,7 @@ func (self *CellsFuse) Mkdir(path string, mode uint32) int {
 }
 
 func (self *CellsFuse) Create(path string, flags int, mode uint32) (int, uint64) {
-	internalPath, errCode := self.beginOp("Create", path)
+	internalPath, errCode := self.beginOp("Create", path, self.logConfig["Create"])
 	if errCode != 0 {
 		return errCode, 0
 	}
@@ -372,7 +373,7 @@ func (self *CellsFuse) Create(path string, flags int, mode uint32) (int, uint64)
 }
 
 func (self *CellsFuse) Write(path string, buff []byte, ofst int64, fh uint64) int {
-	internalPath, errCode := self.beginOp("Write", path)
+	internalPath, errCode := self.beginOp("Write", path, self.logConfig["Write"])
 	if errCode != 0 {
 		return errCode
 	}
@@ -459,7 +460,7 @@ func (self *CellsFuse) uploadLocalToPydio(localPath string, pydioPath string) (o
 }
 
 func (self *CellsFuse) Release(path string, fh uint64) int {
-	internalPath, errCode := self.beginOp("Release", path)
+	internalPath, errCode := self.beginOp("Release", path, self.logConfig["Release"])
 	if errCode != 0 {
 		return errCode
 	}
@@ -538,11 +539,11 @@ func BuildRenameParams(source []string, targetFolder string, targetParent bool) 
 }
 
 func (self *CellsFuse) Rename(oldpath string, newpath string) int {
-	internalOld, errCode := self.beginOp("", oldpath)
+	internalOld, errCode := self.beginOp("Rename", oldpath, self.logConfig["Create"])
 	if errCode != 0 {
 		return errCode
 	}
-	internalNew, errCode := self.beginOp("", newpath)
+	internalNew, errCode := self.beginOp("Rename", newpath, self.logConfig["Rename"])
 	if errCode != 0 {
 		return errCode
 	}
@@ -653,11 +654,11 @@ func (self *CellsFuse) Rename(oldpath string, newpath string) int {
 }
 
 func (self *CellsFuse) Copy(oldpath string, newpath string) int {
-	internalOld, errCode := self.beginOp("", oldpath)
+	internalOld, errCode := self.beginOp("Copy", oldpath, self.logConfig["Copy"])
 	if errCode != 0 {
 		return errCode
 	}
-	internalNew, errCode := self.beginOp("", newpath)
+	internalNew, errCode := self.beginOp("Copy", newpath, self.logConfig["Create"])
 	if errCode != 0 {
 		return errCode
 	}
@@ -765,7 +766,7 @@ func (self *CellsFuse) pollJobStatus(ctx context.Context, jobID string) error {
 }
 
 func (self *CellsFuse) Fsync(path string, datasync bool, fh uint64) int {
-	internalPath, errCode := self.beginOp("Fsync", path)
+	internalPath, errCode := self.beginOp("Fsync", path, self.logConfig["Fsync"])
 	if errCode != 0 {
 		return errCode
 	}
@@ -789,7 +790,7 @@ func (self *CellsFuse) Fsync(path string, datasync bool, fh uint64) int {
 }
 
 func (self *CellsFuse) Unlink(path string) int {
-	internalPath, errCode := self.beginOp("Unlink", path)
+	internalPath, errCode := self.beginOp("Unlink", path, self.logConfig["Unlink"])
 	if errCode != 0 {
 		return errCode
 	}
@@ -820,7 +821,7 @@ func (self *CellsFuse) Unlink(path string) int {
 }
 
 func (self *CellsFuse) Open(path string, flags int) (int, uint64) {
-	internalPath, errCode := self.beginOp("Open", path)
+	internalPath, errCode := self.beginOp("Open", "", self.logConfig["Open"])
 	if errCode != 0 {
 		return errCode, 0
 	}
@@ -864,7 +865,7 @@ func (self *CellsFuse) Open(path string, flags int) (int, uint64) {
 }
 
 func (self *CellsFuse) Truncate(path string, size int64, fh uint64) int {
-	internalPath, errCode := self.beginOp("Truncate", path)
+	internalPath, errCode := self.beginOp("Truncate", path, self.logConfig["Truncate"])
 	if errCode != 0 {
 		return errCode
 	}
@@ -918,7 +919,7 @@ func (self *CellsFuse) Truncate(path string, size int64, fh uint64) int {
 }
 
 func (self *CellsFuse) Utimens(path string, tmsp []fuse.Timespec) int {
-	internalPath, errCode := self.beginOp("Utimens", path)
+	internalPath, errCode := self.beginOp("Utimens", path, self.logConfig["Utimens"])
 	if errCode != 0 {
 		return errCode
 	}
@@ -938,7 +939,7 @@ func (self *CellsFuse) Utimens(path string, tmsp []fuse.Timespec) int {
 }
 
 func (self *CellsFuse) Chmod(path string, mode uint32) int {
-	_, errCode := self.beginOp("Chmod", path)
+	_, errCode := self.beginOp("Chmod", path, self.logConfig["Chmod"])
 	if errCode != 0 {
 		return errCode
 	}
@@ -948,7 +949,7 @@ func (self *CellsFuse) Chmod(path string, mode uint32) int {
 }
 
 func (self *CellsFuse) Chown(path string, uid uint32, gid uint32) int {
-	_, errCode := self.beginOp("Chown", path)
+	_, errCode := self.beginOp("Chown", path, self.logConfig["Chown"])
 	if errCode != 0 {
 		return errCode
 	}
@@ -1076,7 +1077,7 @@ func (self *CellsFuse) Readdir(path string, fill func(name string, stat *fuse.St
 
 func (self *CellsFuse) Read(path string, buff []byte, ofst int64, fh uint64) int {
 	self.Logger("READ: path=%s offset=%d size=%d", path, ofst, len(buff))
-	internalPath, errCode := self.beginOp("", path)
+	internalPath, errCode := self.beginOp("Read", path, self.logConfig["Read"])
 	if errCode != 0 {
 		return errCode
 	}
@@ -1190,6 +1191,10 @@ func expandPath(path string) string {
 
 // These are hardcoded large values bc the Cells API doesn't seem to have a good way to fetch data about it
 func (self *CellsFuse) Statfs(path string, stat *fuse.Statfs_t) int {
+	_, errCode := self.beginOp("Statfs", path, self.logConfig["Statfs"])
+	if errCode != 0 {
+		return errCode
+	}
 	self.Logger("Mounting Pydio Cells...")
 	stat.Bsize = 4096
 	stat.Frsize = 4096
@@ -1229,6 +1234,7 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 					S3Client:          s3Client,
 					PydioCellsRestAPI: apiClient,
 					Logger:            loggerFunc,
+					logConfig:         session.LogConfig,
 					readAheadSize:     int64(session.ChunkSizeMB) * 1024 * 1024,
 					prefetchAhead:     int64(session.PrefetchChunks),
 					cacheChunks:       int64(session.CacheChunks),

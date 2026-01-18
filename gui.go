@@ -4,6 +4,9 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"maps"
+	"slices"
+	"strconv"
 
 	"github.com/diamondburned/gotk4/pkg/gdk/v4"
 	"github.com/diamondburned/gotk4/pkg/gio/v2"
@@ -91,13 +94,37 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 			}
 		})
 	})
+
 	mountBox.Append(browseBtn)
 	box.Append(mountBox)
 
-	// Performance Settings Expander
+	// Performance settings expander
 	perfExpander := gtk.NewExpander("Performance Settings")
 	perfBox := gtk.NewBox(gtk.OrientationVertical, 5)
 	perfExpander.SetChild(perfBox)
+	perfBox.SetMarginTop(10)
+
+	// Logging config expander
+	logConfigExpander := gtk.NewExpander("Logging Settings")
+	logConfigBox := gtk.NewBox(gtk.OrientationVertical, 5)
+	logConfigScrollable := gtk.NewScrolledWindow()
+	logConfigScrollable.SetMinContentHeight(250)
+
+	keys := slices.Collect(maps.Keys(session.LogConfig))
+	slices.Sort(keys)
+	for _, logType := range keys {
+		logConfigOption := gtk.NewCheckButtonWithLabel("Log " + logType + " calls")
+		logConfigOption.SetActive(session.LogConfig[logType])
+		logConfigBox.Append(logConfigOption)
+		logConfigOption.ConnectToggled(func() {
+			fmt.Println("Activated setting " + logType + " to " + strconv.FormatBool(initialLogConfig[logType]))
+			session.LogConfig[logType] = logConfigOption.Active()
+			SaveConfig(session)
+		})
+	}
+	logConfigScrollable.SetChild(logConfigBox)
+	logConfigScrollable.SetMarginTop(10)
+	logConfigExpander.SetChild(logConfigScrollable)
 
 	// Chunk Size
 	chunkLabel := gtk.NewLabel(fmt.Sprintf("Chunk Size: %d MB", session.ChunkSizeMB))
@@ -148,6 +175,7 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 	perfBox.Append(ttlScale)
 
 	box.Append(perfExpander)
+	box.Append(logConfigExpander)
 
 	statusLabel := gtk.NewLabel("Ready")
 	box.Append(statusLabel)
@@ -193,7 +221,7 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 	box.Append(expander)
 
 	scrolled := gtk.NewScrolledWindow()
-	scrolled.SetMinContentHeight(150)
+	scrolled.SetMinContentHeight(250)
 	scrolled.SetPolicy(gtk.PolicyAutomatic, gtk.PolicyAutomatic)
 	expander.SetChild(scrolled)
 

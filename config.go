@@ -19,16 +19,17 @@ func getConfigPath() (string, error) {
 }
 
 type AppConfig struct {
-	AuthToken       string `json:"AuthToken"`
-	RefreshToken    string `json:"RefreshToken"`
-	TokenExpiry     int64  `json:"TokenExpiry"`
-	MountPoint      string `json:"MountPoint"`
-	AppUrl          string `json:"AppUrl"`
-	User            string `json:"User"`
-	ChunkSizeMB     int    `json:"ChunkSizeMB,omitempty"`
-	PrefetchChunks  int    `json:"PrefetchChunks,omitempty"`
-	CacheChunks     int    `json:"CacheChunks,omitempty"`
-	CacheTTLSeconds int    `json:"CacheTTLSeconds,omitempty"`
+	AuthToken       string          `json:"AuthToken"`
+	RefreshToken    string          `json:"RefreshToken"`
+	TokenExpiry     int64           `json:"TokenExpiry"`
+	MountPoint      string          `json:"MountPoint"`
+	AppUrl          string          `json:"AppUrl"`
+	User            string          `json:"User"`
+	ChunkSizeMB     int             `json:"ChunkSizeMB,omitempty"`
+	PrefetchChunks  int             `json:"PrefetchChunks,omitempty"`
+	CacheChunks     int             `json:"CacheChunks,omitempty"`
+	CacheTTLSeconds int             `json:"CacheTTLSeconds,omitempty"`
+	LogConfig       map[string]bool `json:"LogConfig"`
 }
 
 func LoadConfig(session *AppSession) error {
@@ -56,6 +57,13 @@ func LoadConfig(session *AppSession) error {
 	session.MountPoint = config.MountPoint
 	session.AppUrl = config.AppUrl
 	session.User = config.User
+
+	// Merge log config
+	if config.LogConfig != nil {
+		for k, v := range config.LogConfig {
+			session.LogConfig[k] = v
+		}
+	}
 
 	// Load performance settings with defaults if not set
 	if config.ChunkSizeMB > 0 {
@@ -91,6 +99,7 @@ func SaveConfig(session *AppSession) error {
 		PrefetchChunks:  session.PrefetchChunks,
 		CacheChunks:     session.CacheChunks,
 		CacheTTLSeconds: session.CacheTTLSeconds,
+		LogConfig:       session.LogConfig,
 	}
 
 	data, err := json.MarshalIndent(config, "", "  ")
