@@ -1195,7 +1195,6 @@ func (self *CellsFuse) Statfs(path string, stat *fuse.Statfs_t) int {
 	if errCode != 0 {
 		return errCode
 	}
-	self.Logger("Mounting Pydio Cells...")
 	stat.Bsize = 4096
 	stat.Frsize = 4096
 
