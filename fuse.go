@@ -1205,6 +1205,8 @@ func (self *CellsFuse) Statfs(path string, stat *fuse.Statfs_t) int {
 	stat.Files = 9000000
 	stat.Ffree = 9000000
 
+	stat.Namemax = 255
+
 	return 0
 }
 
