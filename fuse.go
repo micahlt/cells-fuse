@@ -1279,6 +1279,14 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 						case session.TrayUpdateSignal <- true:
 						default:
 						}
+						select {
+						case session.GuiUpdateSignal <- true:
+						default:
+						}
+						select {
+						case session.GuiUpdateSignal <- true:
+						default:
+						}
 					}
 					done <- true
 				}()
@@ -1286,6 +1294,10 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 				session.IsMounted = true
 				select {
 				case session.TrayUpdateSignal <- true:
+				default:
+				}
+				select {
+				case session.GuiUpdateSignal <- true:
 				default:
 				}
 
@@ -1316,12 +1328,20 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 				case session.TrayUpdateSignal <- true:
 				default:
 				}
+				select {
+				case session.GuiUpdateSignal <- true:
+				default:
+				}
 			}
 
 		case <-done:
 			Log(session, "FUSE process exited.")
 			session.IsMounted = false
 			session.FuseHost = nil
+			select {
+			case session.GuiUpdateSignal <- true:
+			default:
+			}
 			select {
 			case session.TrayUpdateSignal <- true:
 			default:

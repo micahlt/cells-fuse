@@ -268,7 +268,7 @@ func createMainWindow(app *gtk.Application, session *AppSession, mountSignal cha
 	}()
 
 	go func() {
-		for range session.TrayUpdateSignal {
+		for range session.GuiUpdateSignal {
 			glib.IdleAdd(func() bool {
 				if session.IsMounted {
 					mountBtn.SetLabel("Stop FUSE")

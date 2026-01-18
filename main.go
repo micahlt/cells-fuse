@@ -26,6 +26,7 @@ type AppSession struct {
 	User              string
 	CellsFuse         *CellsFuse
 	TrayUpdateSignal  chan bool
+	GuiUpdateSignal   chan bool
 	LogChannel        chan string
 	LogConfig         map[string]bool
 	MountErrorChannel chan string
@@ -80,6 +81,7 @@ func main() {
 	session := &AppSession{
 		MountPoint:        "~/cells",
 		TrayUpdateSignal:  make(chan bool, 1),
+		GuiUpdateSignal:   make(chan bool, 1),
 		LogChannel:        make(chan string, 100),
 		MountErrorChannel: make(chan string, 1),
 		LogConfig:         logConfig,
