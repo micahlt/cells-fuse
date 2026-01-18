@@ -1188,6 +1188,22 @@ func expandPath(path string) string {
 	return path
 }
 
+// These are hardcoded large values bc the Cells API doesn't seem to have a good way to fetch data about it
+func (self *CellsFuse) Statfs(path string, stat *fuse.Statfs_t) int {
+	self.Logger("Mounting Pydio Cells...")
+	stat.Bsize = 4096
+	stat.Frsize = 4096
+
+	stat.Blocks = 268435456
+	stat.Bfree = 134217728
+	stat.Bavail = 134217728
+
+	stat.Files = 9000000
+	stat.Ffree = 9000000
+
+	return 0
+}
+
 func runFuseBackground(session *AppSession, mountSignal chan bool) {
 	// A sub-channel to catch when the FUSE mount naturally exits (e.g. manual unmount)
 	done := make(chan bool, 1)
@@ -1196,20 +1212,15 @@ func runFuseBackground(session *AppSession, mountSignal chan bool) {
 		select {
 		case shouldMount := <-mountSignal:
 			if shouldMount && session.FuseHost == nil {
-				Log(session, "Mounting Pydio Cells...")
-				Log(session, "DEBUG | Using AppUrl=%s", session.AppUrl)
-				Log(session, "DEBUG | Token length=%d", len(session.AuthToken))
-				Log(session, "DEBUG | Full token: %s", session.AuthToken)
+				Log(session, "DEBUG | Mounting Pydio Cells from URL %s", session.AppUrl)
 
 				s3Client := createS3Client(*session)
 				apiClient := createApiClient(*session)
 
-				// Create logger function
 				loggerFunc := func(format string, args ...interface{}) {
 					Log(session, format, args...)
 				}
 
-				// Initialize the bounded LRU cache for read-ahead chunks
 				maxCacheBytes := int64(DefaultMaxCacheGB) * 1024 * 1024 * 1024
 				readAheadCache := NewLRUChunkCache(maxCacheBytes, loggerFunc)
 
