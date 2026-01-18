@@ -18,3 +18,13 @@ Download the latest binary from the [releases page](https://github.com/micahlt/c
 ### Development
 
 Both the frontend and backend are written in Go, thanks to [cgofuse](https://github.com/winfsp/cgofuse) and [gotk4](https://github.com/diamondburned/gotk4).  Development should be as simple as installing those packages' dependencies and then running `go run .`.  The first run may take a while while the GTK4 dependencies compile.
+
+### Build
+
+#### Linux
+
+Just run `go build .` in the project directory.  Should be as simple as that.
+
+#### Windows
+
+You'll need a Windows PC or VM to build for Windows.  You'll also need to install [MSYS2](https://github.com/msys2/msys2-installer).  Go into your project directory and run `go build -ldflags="-H windowsgui"`.  
