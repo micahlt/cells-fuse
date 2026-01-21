@@ -18,7 +18,12 @@ on:
         type: boolean
         default: true
       build_mac_arm:
-        description: 'Build for macOS ARM (M-Series)'
+        description: 'Build for macOS ARM (Apple Silicon)'
+        required: true
+        type: boolean
+        default: true
+      build_windows:
+        description: 'Build for Windows'
         required: true
         type: boolean
         default: true
@@ -39,6 +44,10 @@ jobs:
           - os: macos-15
             platform: macos
             input_key: build_mac_arm
+            arch: arm64
+          - os: windows-latest
+            platform: windows
+            input_key: build_windows
             arch: arm64
 
     runs-on: ${{ matrix.os }}
@@ -65,13 +74,42 @@ jobs:
         run: |
           brew install macfuse gtk4 gtk+3 gobject-introspection pkg-config
 
-      - name: Build
+      - name: Set up MSYS2
+        if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && matrix.platform == 'windows'
+        uses: msys2/setup-msys2@v2
+      - shell: msys2 {0}
+        run: |
+          pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-gtk4 mingw-w64-x86_64-gobject-introspection pkg-config
+
+      - name: Set up WinFSP
+        if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && matrix.platform == 'windows'
+        run: |
+          $headers = @{
+              Authorization = "token ${{ secrets.GITHUB_TOKEN }}"
+          }
+          $releases = Invoke-WebRequest https://api.github.com/repos/winfsp/winfsp/releases -Headers $headers | `
+              ConvertFrom-Json
+
+          $asseturi = $releases[0].assets.browser_download_url | `
+              Where-Object { $_ -match "winfsp-.*\.msi" }
+          Invoke-WebRequest -Uri $asseturi -Out winfsp.msi
+          Start-Process -NoNewWindow -Wait msiexec "/i winfsp.msi /qn INSTALLLEVEL=1000"
+          
+      - name: Gather Go modules
         if: github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]
         run: |
           go mod download
           go get cells-fuse
-          # Go automatically detects the architecture of the runner
+
+      - name: Build
+        if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && (matrix.platform == 'linux' || matrix.platform == 'macos')
+        run: |
           env GO111MODULE=on go build -v -o cells-fuse_${{ matrix.platform }}-${{ matrix.arch }} .
+
+      - name: Build
+        if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && matrix.platform == 'windows'
+        run: |
+          go build -ldflags="-H windowsgui" .
 
       - name: Upload artifact
         if: github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]
