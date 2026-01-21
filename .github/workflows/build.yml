@@ -48,7 +48,7 @@ jobs:
           - os: windows-latest
             platform: windows
             input_key: build_windows
-            arch: arm64
+            arch: x64
 
     runs-on: ${{ matrix.os }}
     
