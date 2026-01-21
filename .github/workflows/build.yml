@@ -119,10 +119,8 @@ jobs:
       - name: Build
         if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && matrix.platform == 'windows'
         run: |
-          $msysBin = "C:\msys64\mingw64\bin"
-          $currentPath = $env:PATH
-          $newPath = "$currentPath;$msysBin"
-          $CPATH="C:\Program Files (x86)\WinFsp\inc\fuse"
+          $env:PKG_CONFIG = "C:\msys64\mingw64\bin\pkg-config.exe"
+          $env:CPATH = "C:\msys64\mingw64\include;C:\Program Files (x86)\WinFsp\inc\fuse"
           $CGO_ENABLED=1
           go build -ldflags="-H windowsgui" -v -o cells-fuse_${{ matrix.platform }}-${{ matrix.arch }}.exe .
 
