@@ -1,4 +1,4 @@
-name: Assemble binaries
+name: Assemble binaries for Linux systems
 
 on:
   push:
