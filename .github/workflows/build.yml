@@ -74,6 +74,12 @@ jobs:
         run: |
           brew install macfuse gtk4 gtk+3 gobject-introspection pkg-config
 
+      - name: Clean PATH (Windows)
+        if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && matrix.platform == 'windows'
+        run: |
+          $newPath = ($env:Path.Split(';') | Where-Object { $_ -notmatch 'Strawberry' }) -join ';'
+          "PATH=$newPath" >> $env:GITHUB_ENV
+
       - name: Set up MSYS2
         if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && matrix.platform == 'windows'
         uses: msys2/setup-msys2@v2
@@ -115,7 +121,7 @@ jobs:
         shell: cmd
         run: |
           set CPATH=C:\Program Files (x86)\WinFsp\inc\fuse
-          go build -ldflags="-H windowsgui" .
+          go build -ldflags="-H windowsgui" -v -o cells-fuse_${{ matrix.platform }}-${{ matrix.arch }}.exe .
 
       - name: Upload artifact
         if: github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]
