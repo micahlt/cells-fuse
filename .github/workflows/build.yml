@@ -90,6 +90,9 @@ jobs:
             mingw-w64-x86_64-gtk4
             mingw-w64-x86_64-gobject-introspection
             mingw-w64-x86_64-pkg-config
+      - env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: echo "$env:MSYS2_LOCATION"
 
       - name: Set up WinFSP
         if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && matrix.platform == 'windows'
@@ -104,6 +107,12 @@ jobs:
               Where-Object { $_ -match "winfsp-.*\.msi" }
           Invoke-WebRequest -Uri $asseturi -Out winfsp.msi
           Start-Process -NoNewWindow -Wait msiexec "/i winfsp.msi /qn INSTALLLEVEL=1000"
+
+      - name: Verify WinFsp and MSYS2
+        if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && (matrix.platform == 'windows')
+        run: |
+          ls "C:\Program Files (x86)\WinFsp\inc\fuse"
+          ls "C:\msys64\mingw64\bin\pkg-config.exe"
           
       - name: Gather Go modules
         if: github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]
