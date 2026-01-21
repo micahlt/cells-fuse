@@ -148,7 +148,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: |
-      startsWith(github.ref, 'refs/tags/v') || 
+      startsWith(github.ref, 'refs/tags/') || 
       github.ref == 'refs/heads/main'
     permissions:
       contents: write
