@@ -83,7 +83,7 @@ jobs:
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-gtk4
             mingw-w64-x86_64-gobject-introspection
-            pkg-config
+            mingw-w64-x86_64-pkg-config
 
       - name: Set up WinFSP
         if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && matrix.platform == 'windows'
