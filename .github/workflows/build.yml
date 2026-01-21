@@ -122,8 +122,8 @@ jobs:
           $msysBin = "C:\msys64\mingw64\bin"
           $currentPath = $env:PATH
           $newPath = "$currentPath;$msysBin"
-          export CPATH="C:\Program Files (x86)\WinFsp\inc\fuse"
-          export CGO_ENABLED=1
+          $CPATH="C:\Program Files (x86)\WinFsp\inc\fuse"
+          $CGO_ENABLED=1
           go build -ldflags="-H windowsgui" -v -o cells-fuse_${{ matrix.platform }}-${{ matrix.arch }}.exe .
 
       - name: Upload artifact
