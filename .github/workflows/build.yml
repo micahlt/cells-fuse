@@ -30,12 +30,15 @@ jobs:
         include:
           - os: ubuntu-latest
             platform: linux
+            input_key: build_linux
             arch: x64
           - os: macos-15-intel
             platform: macos
+            input_key: build_mac_intel
             arch: intel
           - os: macos-15
             platform: macos
+            input_key: build_mac_arm
             arch: arm64
 
     runs-on: ${{ matrix.os }}
