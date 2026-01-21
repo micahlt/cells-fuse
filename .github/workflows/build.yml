@@ -84,6 +84,7 @@ jobs:
         if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && matrix.platform == 'windows'
         uses: msys2/setup-msys2@v2
         with:
+          location: D:\
           update: true
           install: >-
             mingw-w64-x86_64-toolchain
@@ -112,7 +113,7 @@ jobs:
         if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && (matrix.platform == 'windows')
         run: |
           ls "C:\Program Files (x86)\WinFsp\inc\fuse"
-          ls "C:\msys64\mingw64\bin\pkg-config.exe"
+          ls "D:\msys64\mingw64\bin\"
           
       - name: Gather Go modules
         if: github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]
@@ -128,8 +129,8 @@ jobs:
       - name: Build
         if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && matrix.platform == 'windows'
         run: |
-          $env:PKG_CONFIG = "C:\msys64\mingw64\bin\pkg-config.exe"
-          $env:CPATH = "C:\msys64\mingw64\include;C:\Program Files (x86)\WinFsp\inc\fuse"
+          $env:PKG_CONFIG = "D:\msys64\mingw64\bin\pkg-config.exe"
+          $env:CPATH = "D:\msys64\mingw64\include;C:\Program Files (x86)\WinFsp\inc\fuse"
           $CGO_ENABLED=1
           go build -ldflags="-H windowsgui" -v -o cells-fuse_${{ matrix.platform }}-${{ matrix.arch }}.exe .
 
