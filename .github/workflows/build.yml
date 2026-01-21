@@ -77,9 +77,13 @@ jobs:
       - name: Set up MSYS2
         if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && matrix.platform == 'windows'
         uses: msys2/setup-msys2@v2
-      - shell: msys2 {0}
-        run: |
-          pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-gtk4 mingw-w64-x86_64-gobject-introspection pkg-config
+        with:
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-gtk4
+            mingw-w64-x86_64-gobject-introspection
+            pkg-config
 
       - name: Set up WinFSP
         if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && matrix.platform == 'windows'
