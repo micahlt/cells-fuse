@@ -9,17 +9,21 @@ A FUSE filesystem for Pydio Cells, written in Go + GTK4
 
 ### Supported Platforms
 
-Theoretically, this project is supported on Linux, Windows, and macOS.  At this stage, it has only been compiled and tested on Linux.
+Theoretically, this project is supported on Linux, Windows, and macOS.  However, the vast majority of development and testing takes place on Ubuntu.  Windows has minimal support focus, and macOS has pretty much none.
 
 ### Usage
 
-Download the latest binary from the [releases page](https://github.com/micahlt/cells-fuse/releases/latest) and run it.  If it won't open, make sure that you've set it as executable (`sudo chmod +x cells-fuse`).  Enter your server URL, click the
+Download the latest binary from the [releases page](https://github.com/micahlt/cells-fuse/releases/latest) (or the [latest pre-release](https://github.com/micahlt/cells-fuse/releases) if you're feeling risky) and run it.  If it won't open, make sure that you've set it as executable (`sudo chmod +x cells-fuse`).  Enter your server URL, click the
 
 ### Development
 
 Both the frontend and backend are written in Go, thanks to [cgofuse](https://github.com/winfsp/cgofuse) and [gotk4](https://github.com/diamondburned/gotk4).  Development should be as simple as installing those packages' dependencies and then running `go run .`.  The first run may take a while while the GTK4 dependencies compile.
 
 ### Build
+
+
+>[!WARNING]
+> These build instructions are somewhat out of date.  For now, reference the GitHub Action in this repo to figure out how to set up and build this project.  I'll get around to updating this documentation eventually.
 
 #### Linux
 
