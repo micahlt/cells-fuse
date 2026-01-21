@@ -1,4 +1,4 @@
-name: Assemble binaries for Intel Mac
+name: Assemble binaries for macOS
 
 on:
   push:
@@ -9,7 +9,17 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15-intel
+    strategy:
+      matrix:
+        # macos-15-intel is Intel, macos-15 is Apple Silicon (ARM64)
+        os: [macos-15, macos-15-intel]
+        include:
+          - os: macos-15-intel
+            arch: intel
+          - os: macos-15
+            arch: arm64
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout code
@@ -28,11 +38,12 @@ jobs:
         run: |
           go mod download
           go get cells-fuse
-          env GO111MODULE=on go build -v .
+          # Go automatically detects the architecture of the runner
+          env GO111MODULE=on go build -v -o cells-fuse-${{ matrix.arch }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cells-fuse_linux-x64
-          path: cells-fuse
+          name: cells-fuse_macos-${{ matrix.arch }}
+          path: cells-fuse-${{ matrix.arch }}
           retention-days: 30
