@@ -118,9 +118,11 @@ jobs:
 
       - name: Build
         if: (github.event_name != 'workflow_dispatch' || inputs[matrix.input_key]) && matrix.platform == 'windows'
-        shell: cmd
+        shell: msys2 {0}
         run: |
-          set CPATH=C:\Program Files (x86)\WinFsp\inc\fuse
+          export PATH=$PATH:/c/hostedtoolcache/go/1.25.5/x64/bin
+          export CPATH="/c/Program Files (x86)/WinFsp/inc/fuse"
+          export CGO_ENABLED=1
           go build -ldflags="-H windowsgui" -v -o cells-fuse_${{ matrix.platform }}-${{ matrix.arch }}.exe .
 
       - name: Upload artifact
@@ -128,5 +130,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cells-fuse_${{ matrix.platform }}-${{ matrix.arch }}
-          path: cells-fuse_${{ matrix.platform }}-${{ matrix.arch }}
+          path: cells-fuse_${{ matrix.platform }}-${{ matrix.arch }}*
           retention-days: 30
